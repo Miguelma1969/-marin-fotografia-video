@@ -238,3 +238,7 @@ This package now includes:
 - `DEPLOYMENT.md` with testing and launch instructions
 
 This configuration is suitable for a controlled MVP test. Production biometric search still requires a managed database, private object storage, hardened authentication, monitoring, legal review, and jurisdiction-specific consent controls.
+
+## Professional protected-gallery update
+
+See `PRO_SECURITY_UPDATE.md`. This revision adds explicit photo cart buttons, uncropped portrait previews, larger watermarks, short-lived preview authorization, paid-only original downloads, and a network-first service worker so new designs are not hidden by an old browser cache.

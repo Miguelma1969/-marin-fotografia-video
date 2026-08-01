@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import secrets
+import time
 import shutil
 import smtplib
 import ssl
@@ -53,7 +55,17 @@ PHOTOGRAPHER_EMAIL = os.getenv("PHOTOGRAPHER_EMAIL", "").strip()
 for directory in (DATA_DIR, PHOTO_DIR, SELFIE_DIR, VIDEO_DIR):
     directory.mkdir(parents=True, exist_ok=True)
 
-app = FastAPI(title="FaceFind Photos", version="0.2.0")
+app = FastAPI(title="FaceFind Photos", version="0.3.0")
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    response.headers.setdefault("Permissions-Policy", "camera=(self), microphone=(), geolocation=()")
+    return response
+
 
 @app.get("/health")
 def health_check():
@@ -126,6 +138,14 @@ def init_db() -> None:
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY(event_id) REFERENCES events(id)
             );
+            CREATE TABLE IF NOT EXISTS search_sessions (
+                token TEXT PRIMARY KEY,
+                event_id TEXT NOT NULL,
+                expires_at INTEGER NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(event_id) REFERENCES events(id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_search_sessions_expiry ON search_sessions(expires_at);
             """
         )
         columns = {row[1] for row in connection.execute("PRAGMA table_info(orders)").fetchall()}
@@ -175,12 +195,38 @@ def startup() -> None:
 
 
 def require_admin(request: Request) -> None:
-    """Protect admin order endpoints when ADMIN_TOKEN is configured."""
+    """Protect administrator endpoints with the Render ADMIN_TOKEN."""
     if not ADMIN_TOKEN:
-        return
+        raise HTTPException(503, "ADMIN_TOKEN is not configured on the server.")
     supplied = request.headers.get("x-admin-token", "").strip()
-    if supplied != ADMIN_TOKEN:
+    if not secrets.compare_digest(supplied, ADMIN_TOKEN):
         raise HTTPException(401, "Administrator authorization required.")
+
+
+def issue_search_token(event_id: str, lifetime_seconds: int = 1800) -> str:
+    """Create a short-lived token that can display only this event's protected previews."""
+    token = secrets.token_urlsafe(32)
+    now = int(time.time())
+    with db() as connection:
+        connection.execute("DELETE FROM search_sessions WHERE expires_at < ?", (now,))
+        connection.execute(
+            "INSERT INTO search_sessions(token, event_id, expires_at) VALUES (?, ?, ?)",
+            (token, event_id, now + lifetime_seconds),
+        )
+    return token
+
+
+def validate_search_token(token: str, event_id: str) -> None:
+    if not token:
+        raise HTTPException(403, "A valid photo-search session is required.")
+    now = int(time.time())
+    with db() as connection:
+        row = connection.execute(
+            "SELECT event_id, expires_at FROM search_sessions WHERE token = ?",
+            (token,),
+        ).fetchone()
+    if row is None or row["event_id"] != event_id or int(row["expires_at"]) < now:
+        raise HTTPException(403, "This protected preview link has expired. Search the event again.")
 
 
 def send_order_email(order_id: str, recipient: str, status: str, total_cents: int, access_token: str = "") -> bool:
@@ -323,64 +369,63 @@ def safe_suffix(filename: str) -> str:
     return suffix if suffix in {".jpg", ".jpeg", ".png", ".webp"} else ".jpg"
 
 
-PREVIEW_VERSION = "luxury-watermark-v2"
-
-
 def make_watermarked_preview(source: Path, destination: Path) -> None:
-    """Create a low-resolution, heavily branded preview that is unsuitable for delivery."""
-    with Image.open(source).convert("RGB") as image:
-        image.thumbnail((1200, 1200), Image.Resampling.LANCZOS)
-        canvas = image.convert("RGBA")
+    """Create a low-resolution, strongly watermarked preview that preserves the full frame."""
+    with Image.open(source) as source_image:
+        image = ImageOps.exif_transpose(source_image).convert("RGB")
+        image.thumbnail((1400, 1400), Image.Resampling.LANCZOS)
 
-        # Build a large diagonal watermark tile, then repeat it across the image.
-        short_side = max(1, min(image.size))
-        primary_size = max(34, round(short_side * 0.065))
-        secondary_size = max(18, round(short_side * 0.030))
-        primary_font = _brand_font(primary_size, bold=True)
-        secondary_font = _brand_font(secondary_size, bold=True)
-        tile_w = max(560, round(image.width * 0.72))
-        tile_h = max(230, round(image.height * 0.30))
-        tile = Image.new("RGBA", (tile_w, tile_h), (0, 0, 0, 0))
-        draw = ImageDraw.Draw(tile)
-        line1 = "MARIN FOTOGRAFÍA Y VIDEO"
-        line2 = "PREVIEW • PURCHASE REQUIRED"
-        b1 = draw.textbbox((0, 0), line1, font=primary_font)
-        b2 = draw.textbbox((0, 0), line2, font=secondary_font)
-        x1 = (tile_w - (b1[2] - b1[0])) // 2
-        x2 = (tile_w - (b2[2] - b2[0])) // 2
-        y1 = tile_h // 2 - primary_size
-        y2 = y1 + primary_size + max(10, secondary_size // 2)
-        # Dark outline plus bright lettering remains visible on light and dark photos.
-        draw.text((x1 + 3, y1 + 3), line1, font=primary_font, fill=(0, 0, 0, 125))
-        draw.text((x1, y1), line1, font=primary_font, fill=(255, 255, 255, 175))
-        draw.text((x2 + 2, y2 + 2), line2, font=secondary_font, fill=(0, 0, 0, 120))
-        draw.text((x2, y2), line2, font=secondary_font, fill=(246, 218, 145, 190))
-        tile = tile.rotate(-26, expand=True, resample=Image.Resampling.BICUBIC)
+    canvas = image.convert("RGBA")
+    overlay = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+    short_side = max(1, min(image.width, image.height))
+    large_size = max(34, min(76, round(short_side * 0.07)))
+    small_size = max(18, min(38, round(short_side * 0.033)))
+    brand = "MARIN FOTOGRAFÍA Y VIDEO"
+    notice = "VISTA PREVIA • COMPRA PARA DESCARGAR"
 
-        overlay = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
-        step_x = max(360, round(tile.width * 0.72))
-        step_y = max(220, round(tile.height * 0.58))
-        for row, y in enumerate(range(-tile.height, image.height + tile.height, step_y)):
-            offset = -(step_x // 2) if row % 2 else -80
-            for x in range(offset, image.width + tile.width, step_x):
-                overlay.alpha_composite(tile, (x, y))
+    def fitted_font(text: str, start_size: int, max_width: int, bold: bool = True):
+        size = start_size
+        while size > 16:
+            font = _brand_font(size, bold=bold)
+            box = draw.textbbox((0, 0), text, font=font)
+            if box[2] - box[0] <= max_width:
+                return font, size
+            size -= 2
+        return _brand_font(16, bold=bold), 16
 
-        # A centered seal makes cropping around repeated marks impractical.
-        seal = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
-        seal_draw = ImageDraw.Draw(seal)
-        seal_text = "PROOF"
-        seal_font = _brand_font(max(54, round(short_side * 0.13)), bold=True)
-        box = seal_draw.textbbox((0, 0), seal_text, font=seal_font)
-        sx = (image.width - (box[2] - box[0])) // 2
-        sy = (image.height - (box[3] - box[1])) // 2
-        seal_draw.text((sx + 4, sy + 4), seal_text, font=seal_font, fill=(0, 0, 0, 95))
-        seal_draw.text((sx, sy), seal_text, font=seal_font, fill=(255, 255, 255, 105))
+    large_font, large_size = fitted_font(brand, large_size, round(image.width * 0.82))
+    small_font, small_size = fitted_font(notice, small_size, round(image.width * 0.82))
+    repeat_font, _ = fitted_font(brand, max(18, round(small_size * 0.9)), max(240, round(image.width * 0.45)))
 
-        result = Image.alpha_composite(Image.alpha_composite(canvas, overlay), seal).convert("RGB")
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        result.save(destination, quality=72, optimize=True, progressive=True)
-        destination.with_suffix(destination.suffix + ".version").write_text(PREVIEW_VERSION)
+    # Repeated marks make screenshots and browser sharing unsuitable as finished files.
+    spacing_x = max(330, round(image.width * 0.48))
+    spacing_y = max(190, round(image.height * 0.25))
+    for row, y in enumerate(range(-spacing_y, image.height + spacing_y, spacing_y)):
+        offset = -(spacing_x // 2) if row % 2 else 0
+        for x in range(offset, image.width + spacing_x, spacing_x):
+            draw.text((x + 2, y + 2), brand, font=repeat_font, fill=(0, 0, 0, 100), anchor="mm")
+            draw.text((x, y), brand, font=repeat_font, fill=(255, 255, 255, 130), anchor="mm")
 
+    # Large central protection mark.
+    cx, cy = image.width // 2, image.height // 2
+    brand_box = draw.textbbox((0, 0), brand, font=large_font)
+    notice_box = draw.textbbox((0, 0), notice, font=small_font)
+    panel_w = max(brand_box[2] - brand_box[0], notice_box[2] - notice_box[0]) + 64
+    panel_h = (brand_box[3] - brand_box[1]) + (notice_box[3] - notice_box[1]) + 42
+    draw.rounded_rectangle(
+        (cx - panel_w // 2, cy - panel_h // 2, cx + panel_w // 2, cy + panel_h // 2),
+        radius=max(14, round(short_side * 0.018)),
+        fill=(5, 5, 8, 145),
+        outline=(255, 255, 255, 105),
+        width=max(1, round(short_side * 0.003)),
+    )
+    draw.text((cx + 3, cy - 12 + 3), brand, font=large_font, fill=(0, 0, 0, 180), anchor="mm")
+    draw.text((cx, cy - 12), brand, font=large_font, fill=(255, 255, 255, 235), anchor="mm")
+    draw.text((cx, cy + large_size * 0.68), notice, font=small_font, fill=(238, 214, 166, 235), anchor="mm")
+
+    result = Image.alpha_composite(canvas, overlay).convert("RGB")
+    result.save(destination, format="JPEG", quality=80, optimize=True)
 
 def _brand_font(size: int, bold: bool = False):
     candidates = [
@@ -704,45 +749,49 @@ async def search_faces(
             )
 
     matches.sort(key=lambda item: item["score"], reverse=True)
-    search_token = hashlib.sha256(f"{event_id}:{uuid.uuid4().hex}".encode()).hexdigest()[:24]
+    search_token = issue_search_token(event_id)
+    for match in matches:
+        match["preview_url"] = f"/api/photos/{match['id']}/preview?token={search_token}"
+    protected_videos = []
+    for video in videos:
+        item = dict(video)
+        item["preview_url"] = f"/api/videos/{item['id']}/preview?token={search_token}"
+        protected_videos.append(item)
     return {
         "event": dict(event),
         "matches": matches,
-        "videos": [dict(video) for video in videos],
+        "videos": protected_videos,
         "search_token": search_token,
         "threshold": MATCH_THRESHOLD,
+        "preview_expires_in": 1800,
     }
 
 
 @app.get("/api/photos/{photo_id}/preview")
-def photo_preview(photo_id: str):
+def photo_preview(photo_id: str, token: str = ""):
     with db() as connection:
         photo = connection.execute(
-            "SELECT stored_name, preview_name FROM photos WHERE id = ?", (photo_id,)
+            "SELECT event_id, preview_name FROM photos WHERE id = ?",
+            (photo_id,),
         ).fetchone()
     if photo is None:
         raise HTTPException(404, "Photo not found.")
-    source = PHOTO_DIR / photo["stored_name"]
-    preview = PHOTO_DIR / photo["preview_name"]
-    version_file = preview.with_suffix(preview.suffix + ".version")
-    current_version = version_file.read_text().strip() if version_file.exists() else ""
-    if not preview.exists() or current_version != PREVIEW_VERSION:
-        make_watermarked_preview(source, preview)
+    validate_search_token(token, photo["event_id"])
     return FileResponse(
-        preview,
+        PHOTO_DIR / photo["preview_name"],
         media_type="image/jpeg",
         headers={
             "Cache-Control": "private, no-store, max-age=0",
             "Pragma": "no-cache",
-            "X-Content-Type-Options": "nosniff",
             "Content-Disposition": "inline",
         },
     )
 
 
 @app.get("/api/photos/{photo_id}/signature-preview")
-def photo_signature_preview(photo_id: str):
-    """Reduced-resolution sample of the discreet branding on the final digital file."""
+def photo_signature_preview(photo_id: str, request: Request):
+    """Administrator-only sample of the final branded digital file."""
+    require_admin(request)
     with db() as connection:
         photo = connection.execute("SELECT stored_name FROM photos WHERE id = ?", (photo_id,)).fetchone()
     if photo is None:
@@ -761,7 +810,7 @@ def download_purchased_digital(order_id: str, photo_id: str):
         photo = connection.execute("SELECT stored_name, original_name FROM photos WHERE id = ?", (photo_id,)).fetchone()
     if order is None or photo is None:
         raise HTTPException(404, "Order or photo not found.")
-    if order["status"] != "paid":
+    if order["status"] not in {"paid", "processing_prints", "shipped", "completed"}:
         raise HTTPException(403, "This download is released only after payment is confirmed.")
     purchased_ids = json.loads(order["photo_ids_json"])
     if photo_id not in purchased_ids:
@@ -780,12 +829,20 @@ def download_purchased_digital(order_id: str, photo_id: str):
 
 
 @app.get("/api/videos/{video_id}/preview")
-def video_preview(video_id: str):
+def video_preview(video_id: str, token: str = ""):
     with db() as connection:
-        video = connection.execute("SELECT stored_name FROM videos WHERE id = ?", (video_id,)).fetchone()
+        video = connection.execute(
+            "SELECT event_id, stored_name FROM videos WHERE id = ?",
+            (video_id,),
+        ).fetchone()
     if video is None:
         raise HTTPException(404, "Video not found.")
-    return FileResponse(VIDEO_DIR / video["stored_name"], media_type="video/mp4")
+    validate_search_token(token, video["event_id"])
+    return FileResponse(
+        VIDEO_DIR / video["stored_name"],
+        media_type="video/mp4",
+        headers={"Cache-Control": "private, no-store, max-age=0", "Content-Disposition": "inline"},
+    )
 
 
 @app.get("/api/orders/{order_id}/videos/{video_id}/download")
@@ -795,7 +852,7 @@ def download_purchased_video(order_id: str, video_id: str):
         video = connection.execute("SELECT stored_name, title FROM videos WHERE id = ?", (video_id,)).fetchone()
     if order is None or video is None:
         raise HTTPException(404, "Order or video not found.")
-    if order["status"] != "paid":
+    if order["status"] not in {"paid", "processing_prints", "shipped", "completed"}:
         raise HTTPException(403, "This video is released only after payment is confirmed.")
     if video_id not in json.loads(order["video_ids_json"] or "[]"):
         raise HTTPException(403, "This video is not part of the order.")
