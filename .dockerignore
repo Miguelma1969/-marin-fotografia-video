@@ -1,0 +1,13 @@
+.venv
+__pycache__
+*.pyc
+.git
+.env
+*.zip
+data/app.db
+data/selfies/*
+data/photos/*
+data/videos/*
+!data/selfies/.gitkeep
+!data/photos/.gitkeep
+!data/videos/.gitkeep

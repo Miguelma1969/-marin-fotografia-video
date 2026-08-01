@@ -1,0 +1,53 @@
+services:
+  - type: web
+    name: marin-fotografia-video
+    runtime: docker
+    plan: starter
+    healthCheckPath: /health
+    disk:
+      name: marin-data
+      mountPath: /var/data
+      sizeGB: 10
+    envVars:
+      - key: PUBLIC_BASE_URL
+        sync: false
+      - key: ADMIN_TOKEN
+        generateValue: true
+      - key: DATA_DIR
+        value: /var/data
+      - key: MATCH_THRESHOLD
+        value: "0.42"
+      - key: FACE_MODEL
+        value: buffalo_sc
+      - key: FACE_MODEL_ROOT
+        value: /opt/insightface
+      - key: FACE_DET_SIZE
+        value: "320"
+      - key: FACE_MAX_IMAGE_DIM
+        value: "2000"
+      - key: OMP_NUM_THREADS
+        value: "1"
+      - key: OPENBLAS_NUM_THREADS
+        value: "1"
+      - key: MKL_NUM_THREADS
+        value: "1"
+      - key: NUMEXPR_NUM_THREADS
+        value: "1"
+      - key: MALLOC_ARENA_MAX
+        value: "2"
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        value: "587"
+      - key: SMTP_USERNAME
+        sync: false
+      - key: SMTP_PASSWORD
+        sync: false
+      - key: SMTP_FROM
+        sync: false
+      - key: PHOTOGRAPHER_EMAIL
+        sync: false
