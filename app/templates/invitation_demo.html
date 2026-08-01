@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>{{ name }} | Marin Luxury Invitations Demo</title>
+  <link rel="stylesheet" href="/static/invitation-demo.css">
+  <meta name="description" content="Interactive digital invitation demo by Marin Luxury Invitations.">
+</head>
+<body class="theme-{{ theme }}">
+  <div class="demo-actions" aria-label="Invitation actions"><button id="shareInvitation" type="button">Share</button><a id="orderInvitation" href="/?order_invitation={{ theme }}&design={{ name | urlencode }}#contactSection">Order this design</a></div>
+  <section class="demo-hero snap"><div class="sparkles"></div><div class="demo-brand">Marin Luxury Invitations</div><div class="ornament">✦</div><p>{{ subtitle }}</p><h1>{{ name }}</h1><h2>{{ title }}</h2><div class="date">{{ date }}</div><div class="scroll">Scroll ↓</div></section>
+  <section class="demo-panel snap"><div class="frame"><div class="kicker">WITH THE BLESSING OF MY FAMILY</div><h2>You are invited</h2><p>Join us for a beautiful evening filled with family, joy, music, and unforgettable memories.</p><div class="quote">“Today a dream becomes a celebration.”</div></div></section>
+  <section class="demo-panel snap alt"><div class="frame"><div class="kicker">COUNTDOWN</div><h2>Save the date</h2><div class="countdown"><span><strong>113</strong>Days</span><span><strong>08</strong>Hours</span><span><strong>24</strong>Minutes</span></div><button>Save to calendar</button></div></section>
+  <section class="demo-panel snap"><div class="frame"><div class="kicker">THE CELEBRATION</div><h2>Event details</h2><div class="timeline"><div><b>1:00 PM</b><span>Mass Ceremony</span></div><div><b>6:30 PM</b><span>Dinner Reception</span></div><div><b>8:30 PM</b><span>Presentation & Waltz</span></div><div><b>10:00 PM</b><span>Dancing</span></div></div></div></section>
+  <section class="demo-panel snap alt"><div class="frame"><div class="kicker">LOCATIONS</div><h2>Directions</h2><div class="location-card"><strong>St. Matthew Church</strong><span>Houston, Texas</span><button>Open map</button></div><div class="location-card"><strong>La Fontaine Reception Hall</strong><span>Houston, Texas</span><button>Open map</button></div></div></section>
+  <section class="demo-panel snap"><div class="frame"><div class="kicker">PLEASE RESPOND</div><h2>RSVP</h2><p>We would be honored to celebrate this special day with you.</p><button type="button">Confirm attendance</button><div class="final-actions"><button id="shareInvitationBottom" type="button">Share invitation</button><a class="order-link" href="/?order_invitation={{ theme }}&design={{ name | urlencode }}#contactSection">Order this design</a></div><a href="/">Return to Marin Photography & Video</a><small class="watermark">Demo by Marin Luxury Invitations</small></div></section>
+<div id="shareNotice" class="share-notice" role="status" aria-live="polite"></div>
+<script>
+  const shareData = {
+    title: `${document.title}`,
+    text: `View this Marin Luxury Invitations demo: {{ name }} — {{ title }}`,
+    url: window.location.href
+  };
+  async function shareInvitation(){
+    const notice = document.getElementById('shareNotice');
+    try {
+      if (navigator.share) {
+        await navigator.share(shareData);
+      } else {
+        await navigator.clipboard.writeText(window.location.href);
+        notice.textContent = 'Invitation link copied. Paste it into WhatsApp, text, email, or social media.';
+        notice.classList.add('show');
+        setTimeout(()=>notice.classList.remove('show'), 4200);
+      }
+    } catch (error) {
+      if (error.name !== 'AbortError') {
+        notice.textContent = 'Copy this page link from your browser to share it.';
+        notice.classList.add('show');
+        setTimeout(()=>notice.classList.remove('show'), 4200);
+      }
+    }
+  }
+  document.getElementById('shareInvitation').addEventListener('click', shareInvitation);
+  document.getElementById('shareInvitationBottom').addEventListener('click', shareInvitation);
+</script>
+</body>
+</html>
