@@ -48,7 +48,7 @@ STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "").strip()
 SMTP_HOST = os.getenv("SMTP_HOST", "").strip()
 SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
 SMTP_USERNAME = os.getenv("SMTP_USERNAME", "").strip()
-SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "").strip()
+SMTP_PASSWORD = "".join(os.getenv("SMTP_PASSWORD", "").split())
 SMTP_FROM = os.getenv("SMTP_FROM", SMTP_USERNAME or "orders@localhost").strip()
 PHOTOGRAPHER_EMAIL = os.getenv("PHOTOGRAPHER_EMAIL", "").strip()
 
@@ -230,32 +230,56 @@ def validate_search_token(token: str, event_id: str) -> None:
 
 
 def send_order_email(order_id: str, recipient: str, status: str, total_cents: int, access_token: str = "") -> bool:
-    """Send a lightweight order confirmation when SMTP settings are configured."""
+    """Send an order email and write SMTP failures to Render logs."""
     if not SMTP_HOST or not recipient:
+        print(f"[email] skipped: SMTP_HOST or recipient is missing (recipient={recipient!r})", flush=True)
         return False
+
+    released = status in {"paid", "processing_prints", "shipped", "completed"}
+    subject_status = "Your photo is ready to download" if released else "Order received"
+    availability = (
+        "Your payment has been confirmed. Open your private order page below to download your purchased photo.\n"
+        if released
+        else "Your order is waiting for payment confirmation. Downloads will appear after the photographer approves payment.\n"
+    )
+
     msg = EmailMessage()
-    msg["Subject"] = f"Marin Fotografía y Video order {order_id[:8].upper()}"
+    msg["Subject"] = f"{subject_status} • Marin Fotografía y Video • {order_id[:8].upper()}"
     msg["From"] = SMTP_FROM
     msg["To"] = recipient
-    portal_line = f"Customer order page: {PUBLIC_BASE_URL}/account/{access_token}\n\n" if access_token else ""
+    portal_line = f"Private order page: {PUBLIC_BASE_URL}/account/{access_token}\n\n" if access_token else ""
     msg.set_content(
         f"Thank you for your order.\n\n"
         f"Order: {order_id[:8].upper()}\n"
-        f"Status: {status}\n"
+        f"Status: {status.replace('_', ' ')}\n"
         f"Total: ${total_cents / 100:.2f}\n\n"
-        f"Your paid digital downloads and videos will be available after payment confirmation.\n"
+        f"{availability}"
         f"{portal_line}"
         f"Marin Fotografía y Video • {BRAND_PHONE}"
     )
+
     context = ssl.create_default_context()
     try:
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=15) as server:
-            server.starttls(context=context)
-            if SMTP_USERNAME:
-                server.login(SMTP_USERNAME, SMTP_PASSWORD)
-            server.send_message(msg)
+        if SMTP_PORT == 465:
+            with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=20, context=context) as server:
+                if SMTP_USERNAME:
+                    server.login(SMTP_USERNAME, SMTP_PASSWORD)
+                server.send_message(msg)
+        else:
+            with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as server:
+                server.ehlo()
+                server.starttls(context=context)
+                server.ehlo()
+                if SMTP_USERNAME:
+                    server.login(SMTP_USERNAME, SMTP_PASSWORD)
+                server.send_message(msg)
+        print(f"[email] sent to {recipient} for order {order_id[:8].upper()} status={status}", flush=True)
         return True
-    except Exception:
+    except Exception as exc:
+        print(
+            f"[email] failed for {recipient}: {type(exc).__name__}: {exc}",
+            flush=True,
+        )
         return False
 
 
@@ -439,50 +463,59 @@ def _brand_font(size: int, bold: bool = False):
 
 
 def add_brand_signature(source: Path, destination: Path, max_dimension: int | None = None) -> None:
-    """Create the customer digital file with a discreet, modern lower-right signature."""
-    with Image.open(source).convert("RGB") as image:
-        if max_dimension:
-            image.thumbnail((max_dimension, max_dimension), Image.Resampling.LANCZOS)
+    """Create the purchased JPEG without allocating full-size RGBA overlays.
 
-        canvas = image.convert("RGBA")
-        overlay = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
-        draw = ImageDraw.Draw(overlay)
+    Large camera photographs can exceed Render memory when converted into several
+    simultaneous RGBA copies. This implementation keeps one RGB image in memory
+    and draws a small opaque brand panel directly onto it.
+    """
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with Image.open(source) as source_image:
+        image = ImageOps.exif_transpose(source_image)
+        if image.mode != "RGB":
+            image = image.convert("RGB")
+        else:
+            image = image.copy()
 
-        scale = max(1.0, min(image.width, image.height) / 1200)
-        name_size = max(18, round(25 * scale))
-        phone_size = max(15, round(19 * scale))
-        name_font = _brand_font(name_size, bold=True)
-        phone_font = _brand_font(phone_size)
-        padding_x = max(18, round(24 * scale))
-        padding_y = max(14, round(17 * scale))
-        line_gap = max(3, round(4 * scale))
-        outer_margin = max(20, round(28 * scale))
+    if max_dimension:
+        image.thumbnail((max_dimension, max_dimension), Image.Resampling.LANCZOS)
 
-        name_box = draw.textbbox((0, 0), BRAND_NAME, font=name_font)
-        phone_box = draw.textbbox((0, 0), BRAND_PHONE, font=phone_font)
-        name_w, name_h = name_box[2] - name_box[0], name_box[3] - name_box[1]
-        phone_w, phone_h = phone_box[2] - phone_box[0], phone_box[3] - phone_box[1]
-        panel_w = max(name_w, phone_w) + padding_x * 2
-        panel_h = name_h + phone_h + line_gap + padding_y * 2
-        x2 = image.width - outer_margin
-        y2 = image.height - outer_margin
-        x1 = max(outer_margin, x2 - panel_w)
-        y1 = max(outer_margin, y2 - panel_h)
-        radius = max(10, round(14 * scale))
+    draw = ImageDraw.Draw(image)
+    scale = max(1.0, min(image.width, image.height) / 1200)
+    name_size = max(18, round(25 * scale))
+    phone_size = max(15, round(19 * scale))
+    name_font = _brand_font(name_size, bold=True)
+    phone_font = _brand_font(phone_size)
+    padding_x = max(18, round(24 * scale))
+    padding_y = max(14, round(17 * scale))
+    line_gap = max(3, round(4 * scale))
+    outer_margin = max(20, round(28 * scale))
 
-        draw.rounded_rectangle((x1, y1, x2, y2), radius=radius, fill=(8, 10, 14, 112))
-        text_x = x2 - padding_x
-        name_y = y1 + padding_y
-        phone_y = name_y + name_h + line_gap
-        shadow = max(1, round(scale))
-        for dx, dy in ((shadow, shadow),):
-            draw.text((text_x + dx, name_y + dy), BRAND_NAME, font=name_font, anchor="ra", fill=(0, 0, 0, 120))
-            draw.text((text_x + dx, phone_y + dy), BRAND_PHONE, font=phone_font, anchor="ra", fill=(0, 0, 0, 120))
-        draw.text((text_x, name_y), BRAND_NAME, font=name_font, anchor="ra", fill=(255, 255, 255, 220))
-        draw.text((text_x, phone_y), BRAND_PHONE, font=phone_font, anchor="ra", fill=(232, 236, 240, 205))
+    name_box = draw.textbbox((0, 0), BRAND_NAME, font=name_font)
+    phone_box = draw.textbbox((0, 0), BRAND_PHONE, font=phone_font)
+    name_w, name_h = name_box[2] - name_box[0], name_box[3] - name_box[1]
+    phone_w, phone_h = phone_box[2] - phone_box[0], phone_box[3] - phone_box[1]
+    panel_w = max(name_w, phone_w) + padding_x * 2
+    panel_h = name_h + phone_h + line_gap + padding_y * 2
+    x2 = image.width - outer_margin
+    y2 = image.height - outer_margin
+    x1 = max(outer_margin, x2 - panel_w)
+    y1 = max(outer_margin, y2 - panel_h)
+    radius = max(10, round(14 * scale))
 
-        result = Image.alpha_composite(canvas, overlay).convert("RGB")
-        result.save(destination, format="JPEG", quality=96, subsampling=0, optimize=True)
+    draw.rounded_rectangle((x1, y1, x2, y2), radius=radius, fill=(16, 18, 24))
+    text_x = x2 - padding_x
+    name_y = y1 + padding_y
+    phone_y = name_y + name_h + line_gap
+    shadow = max(1, round(scale))
+    draw.text((text_x + shadow, name_y + shadow), BRAND_NAME, font=name_font, anchor="ra", fill=(0, 0, 0))
+    draw.text((text_x + shadow, phone_y + shadow), BRAND_PHONE, font=phone_font, anchor="ra", fill=(0, 0, 0))
+    draw.text((text_x, name_y), BRAND_NAME, font=name_font, anchor="ra", fill=(255, 255, 255))
+    draw.text((text_x, phone_y), BRAND_PHONE, font=phone_font, anchor="ra", fill=(232, 236, 240))
+
+    # optimize=True can require substantial extra memory for large JPEGs.
+    image.save(destination, format="JPEG", quality=94, subsampling=0, optimize=False)
+    image.close()
 
 
 def cosine_similarity(a: Iterable[float], b: Iterable[float]) -> float:
@@ -818,13 +851,25 @@ def download_purchased_digital(order_id: str, photo_id: str):
 
     source = PHOTO_DIR / photo["stored_name"]
     output = PHOTO_DIR / f"{order_id}_{photo_id}_digital.jpg"
-    if not output.exists():
-        add_brand_signature(source, output)
+    if not source.is_file():
+        print(f"[download] missing source file: {source}", flush=True)
+        raise HTTPException(404, "The purchased photo file is missing. Contact the photographer.")
+    if not output.is_file():
+        try:
+            add_brand_signature(source, output)
+        except Exception as exc:
+            print(
+                f"[download] failed order={order_id[:8]} photo={photo_id[:8]}: {type(exc).__name__}: {exc}",
+                flush=True,
+            )
+            output.unlink(missing_ok=True)
+            raise HTTPException(503, "The download is being prepared. Please try again in a moment.") from exc
     safe_name = Path(photo["original_name"]).stem or "marin-photo"
     return FileResponse(
         output,
         media_type="image/jpeg",
         filename=f"{safe_name}-Marin-Fotografia-y-Video.jpg",
+        headers={"Cache-Control": "private, no-store, max-age=0"},
     )
 
 
@@ -882,6 +927,18 @@ def update_order_status(order_id: str, payload: dict, request: Request):
         connection.execute("UPDATE orders SET status = ? WHERE id = ?", (status, order_id))
     emailed = send_order_email(order_id, row["email"], status, row["total_cents"], row["access_token"])
     return {"ok": True, "order_id": order_id, "status": status, "email_sent": emailed}
+
+
+@app.post("/api/admin/email-test")
+def admin_email_test(payload: dict, request: Request):
+    require_admin(request)
+    recipient = str(payload.get("email") or PHOTOGRAPHER_EMAIL or SMTP_USERNAME).strip()
+    if "@" not in recipient:
+        raise HTTPException(400, "Enter a valid email address for the test.")
+    sent = send_order_email("emailtest", recipient, "paid", 0, "")
+    if not sent:
+        raise HTTPException(502, "Email test failed. Open Render Logs and look for a line beginning with [email] failed.")
+    return {"ok": True, "email_sent": True, "recipient": recipient}
 
 
 @app.post("/api/stripe/webhook")

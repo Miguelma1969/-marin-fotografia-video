@@ -445,12 +445,24 @@ async function loadOrders(){
       const id=button.dataset.saveOrder;
       const status=document.querySelector(`[data-order-status="${id}"]`).value;
       button.disabled=true;
-      try{ const result=await api(`/api/admin/orders/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json',...adminHeaders()},body:JSON.stringify({status})}); setStatus($('#orderStatus'),`Order ${id.slice(0,8).toUpperCase()} updated to ${result.status.replaceAll('_',' ')}.${result.email_sent?' Email sent.':''}`,'success'); }
+      try{ const result=await api(`/api/admin/orders/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json',...adminHeaders()},body:JSON.stringify({status})}); setStatus($('#orderStatus'),`Order ${id.slice(0,8).toUpperCase()} updated to ${result.status.replaceAll('_',' ')}.${result.email_sent?' Email sent.':' Email was not sent; use Send test email and check Render Logs.'}`,result.email_sent?'success':'error'); }
       catch(error){ setStatus($('#orderStatus'),error.message,'error'); }
       finally{button.disabled=false;}
     }));
     setStatus($('#orderStatus'),orders.length?`${orders.length} order(s) loaded.`:'');
   }catch(error){ setStatus($('#orderStatus'),error.message,'error'); }
 }
+$('#testEmail')?.addEventListener('click',async()=>{
+  const suggested=$('#buyerEmail')?.value||'';
+  const email=window.prompt('Send a test email to:',suggested);
+  if(!email)return;
+  setStatus($('#orderStatus'),'Sending test email…');
+  try{
+    const result=await api('/api/admin/email-test',{method:'POST',headers:{'Content-Type':'application/json',...adminHeaders()},body:JSON.stringify({email})});
+    setStatus($('#orderStatus'),`Test email sent to ${result.recipient}. Check Inbox and Spam.`,'success');
+  }catch(error){
+    setStatus($('#orderStatus'),error.message,'error');
+  }
+});
 $('#refreshOrders')?.addEventListener('click',loadOrders);
 $('#adminToken')?.addEventListener('change',loadOrders);
