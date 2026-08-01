@@ -323,23 +323,63 @@ def safe_suffix(filename: str) -> str:
     return suffix if suffix in {".jpg", ".jpeg", ".png", ".webp"} else ".jpg"
 
 
+PREVIEW_VERSION = "luxury-watermark-v2"
+
+
 def make_watermarked_preview(source: Path, destination: Path) -> None:
+    """Create a low-resolution, heavily branded preview that is unsuitable for delivery."""
     with Image.open(source).convert("RGB") as image:
-        image.thumbnail((1600, 1600))
-        overlay = Image.new("RGBA", image.size, (255, 255, 255, 0))
-        draw = ImageDraw.Draw(overlay)
-        text = "FACEFIND PREVIEW • PURCHASE TO DOWNLOAD"
-        font = ImageFont.load_default(size=24)
-        bbox = draw.textbbox((0, 0), text, font=font)
-        text_w = bbox[2] - bbox[0]
-        text_h = bbox[3] - bbox[1]
-        spacing_x = max(300, text_w + 120)
-        spacing_y = max(180, text_h + 100)
-        for y in range(-spacing_y, image.height + spacing_y, spacing_y):
-            for x in range(-spacing_x, image.width + spacing_x, spacing_x):
-                draw.text((x, y), text, fill=(255, 255, 255, 90), font=font)
-        result = Image.alpha_composite(image.convert("RGBA"), overlay).convert("RGB")
-        result.save(destination, quality=84, optimize=True)
+        image.thumbnail((1200, 1200), Image.Resampling.LANCZOS)
+        canvas = image.convert("RGBA")
+
+        # Build a large diagonal watermark tile, then repeat it across the image.
+        short_side = max(1, min(image.size))
+        primary_size = max(34, round(short_side * 0.065))
+        secondary_size = max(18, round(short_side * 0.030))
+        primary_font = _brand_font(primary_size, bold=True)
+        secondary_font = _brand_font(secondary_size, bold=True)
+        tile_w = max(560, round(image.width * 0.72))
+        tile_h = max(230, round(image.height * 0.30))
+        tile = Image.new("RGBA", (tile_w, tile_h), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(tile)
+        line1 = "MARIN FOTOGRAFÍA Y VIDEO"
+        line2 = "PREVIEW • PURCHASE REQUIRED"
+        b1 = draw.textbbox((0, 0), line1, font=primary_font)
+        b2 = draw.textbbox((0, 0), line2, font=secondary_font)
+        x1 = (tile_w - (b1[2] - b1[0])) // 2
+        x2 = (tile_w - (b2[2] - b2[0])) // 2
+        y1 = tile_h // 2 - primary_size
+        y2 = y1 + primary_size + max(10, secondary_size // 2)
+        # Dark outline plus bright lettering remains visible on light and dark photos.
+        draw.text((x1 + 3, y1 + 3), line1, font=primary_font, fill=(0, 0, 0, 125))
+        draw.text((x1, y1), line1, font=primary_font, fill=(255, 255, 255, 175))
+        draw.text((x2 + 2, y2 + 2), line2, font=secondary_font, fill=(0, 0, 0, 120))
+        draw.text((x2, y2), line2, font=secondary_font, fill=(246, 218, 145, 190))
+        tile = tile.rotate(-26, expand=True, resample=Image.Resampling.BICUBIC)
+
+        overlay = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+        step_x = max(360, round(tile.width * 0.72))
+        step_y = max(220, round(tile.height * 0.58))
+        for row, y in enumerate(range(-tile.height, image.height + tile.height, step_y)):
+            offset = -(step_x // 2) if row % 2 else -80
+            for x in range(offset, image.width + tile.width, step_x):
+                overlay.alpha_composite(tile, (x, y))
+
+        # A centered seal makes cropping around repeated marks impractical.
+        seal = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+        seal_draw = ImageDraw.Draw(seal)
+        seal_text = "PROOF"
+        seal_font = _brand_font(max(54, round(short_side * 0.13)), bold=True)
+        box = seal_draw.textbbox((0, 0), seal_text, font=seal_font)
+        sx = (image.width - (box[2] - box[0])) // 2
+        sy = (image.height - (box[3] - box[1])) // 2
+        seal_draw.text((sx + 4, sy + 4), seal_text, font=seal_font, fill=(0, 0, 0, 95))
+        seal_draw.text((sx, sy), seal_text, font=seal_font, fill=(255, 255, 255, 105))
+
+        result = Image.alpha_composite(Image.alpha_composite(canvas, overlay), seal).convert("RGB")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        result.save(destination, quality=72, optimize=True, progressive=True)
+        destination.with_suffix(destination.suffix + ".version").write_text(PREVIEW_VERSION)
 
 
 def _brand_font(size: int, bold: bool = False):
@@ -677,10 +717,27 @@ async def search_faces(
 @app.get("/api/photos/{photo_id}/preview")
 def photo_preview(photo_id: str):
     with db() as connection:
-        photo = connection.execute("SELECT preview_name FROM photos WHERE id = ?", (photo_id,)).fetchone()
+        photo = connection.execute(
+            "SELECT stored_name, preview_name FROM photos WHERE id = ?", (photo_id,)
+        ).fetchone()
     if photo is None:
         raise HTTPException(404, "Photo not found.")
-    return FileResponse(PHOTO_DIR / photo["preview_name"], media_type="image/jpeg")
+    source = PHOTO_DIR / photo["stored_name"]
+    preview = PHOTO_DIR / photo["preview_name"]
+    version_file = preview.with_suffix(preview.suffix + ".version")
+    current_version = version_file.read_text().strip() if version_file.exists() else ""
+    if not preview.exists() or current_version != PREVIEW_VERSION:
+        make_watermarked_preview(source, preview)
+    return FileResponse(
+        preview,
+        media_type="image/jpeg",
+        headers={
+            "Cache-Control": "private, no-store, max-age=0",
+            "Pragma": "no-cache",
+            "X-Content-Type-Options": "nosniff",
+            "Content-Disposition": "inline",
+        },
+    )
 
 
 @app.get("/api/photos/{photo_id}/signature-preview")

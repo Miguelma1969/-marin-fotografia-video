@@ -233,8 +233,12 @@ $('#searchForm').addEventListener('submit', async (event)=>{
 
 function renderMatches(matches){
   $('#results').innerHTML = matches.length ? matches.map(match=>`
-    <article class="photo-card">
-      <img src="${match.preview_url}" alt="Matched event preview" loading="lazy" />
+    <article class="photo-card" data-card-for="${match.id}" tabindex="0" aria-label="Select this photo">
+      <div class="protected-preview" data-select-photo="${match.id}">
+        <img src="${match.preview_url}" alt="Watermarked event photo preview" loading="lazy" draggable="false" decoding="async" />
+        <span class="preview-lock" aria-hidden="true">🔒 PREVIEW</span>
+        <span class="selected-badge" aria-hidden="true">✓ Selected</span>
+      </div>
       <div class="photo-choice">
         <label>Product<select data-product-for="${match.id}">
           <option value="digital" data-price="${match.price_cents}">Digital download — ${money(match.price_cents)}</option>
@@ -248,17 +252,51 @@ function renderMatches(matches){
         </select></label>
       </div>
       <div class="photo-meta">
-        <label><input type="checkbox" data-photo-id="${match.id}" data-price="${match.price_cents}" /> Add to cart</label>
+        <label class="cart-toggle"><input type="checkbox" data-photo-id="${match.id}" data-price="${match.price_cents}" /><span>Add to cart</span></label>
         <strong data-item-total="${match.id}">${money(match.price_cents)}</strong>
       </div>
     </article>`).join('') : '<p class="muted">No matches met the current confidence threshold.</p>';
-  $$('[data-product-for]').forEach(select=>select.addEventListener('change',()=>{ const id=select.dataset.productFor; const option=select.selectedOptions[0]; photoProducts.set(id,{product:select.value,price:Number(option.dataset.price||0)}); document.querySelector(`[data-item-total="${id}"]`).textContent=money(Number(option.dataset.price||0)); updateCart(); }));
-  $$('[data-photo-id]').forEach(box=>box.addEventListener('change',()=>{
-    const select=document.querySelector(`[data-product-for="${box.dataset.photoId}"]`); const option=select.selectedOptions[0]; photoProducts.set(box.dataset.photoId,{product:select.value,price:Number(option.dataset.price||0)});
-    box.checked ? cart.add(box.dataset.photoId) : cart.delete(box.dataset.photoId);
+
+  const setPhotoSelection=(id,selected)=>{
+    const box=document.querySelector(`[data-photo-id="${id}"]`);
+    const card=document.querySelector(`[data-card-for="${id}"]`);
+    if(!box) return;
+    box.checked=selected;
+    const select=document.querySelector(`[data-product-for="${id}"]`);
+    const option=select?.selectedOptions?.[0];
+    photoProducts.set(id,{product:select?.value||'digital',price:Number(option?.dataset.price||box.dataset.price||0)});
+    selected ? cart.add(id) : cart.delete(id);
+    card?.classList.toggle('selected',selected);
+    updateCart();
+  };
+
+  $$('[data-product-for]').forEach(select=>select.addEventListener('change',()=>{
+    const id=select.dataset.productFor;
+    const option=select.selectedOptions[0];
+    photoProducts.set(id,{product:select.value,price:Number(option.dataset.price||0)});
+    document.querySelector(`[data-item-total="${id}"]`).textContent=money(Number(option.dataset.price||0));
     updateCart();
   }));
+  $$('[data-photo-id]').forEach(box=>box.addEventListener('change',()=>setPhotoSelection(box.dataset.photoId,box.checked)));
+  $$('[data-select-photo]').forEach(preview=>preview.addEventListener('click',()=>{
+    const id=preview.dataset.selectPhoto;
+    const box=document.querySelector(`[data-photo-id="${id}"]`);
+    setPhotoSelection(id,!box.checked);
+  }));
+  $$('[data-card-for]').forEach(card=>card.addEventListener('keydown',event=>{
+    if((event.key==='Enter'||event.key===' ') && !event.target.matches('select,input')){
+      event.preventDefault();
+      const id=card.dataset.cardFor;
+      const box=document.querySelector(`[data-photo-id="${id}"]`);
+      setPhotoSelection(id,!box.checked);
+    }
+  }));
+  $$('.protected-preview img').forEach(img=>{
+    img.addEventListener('contextmenu',event=>event.preventDefault());
+    img.addEventListener('dragstart',event=>event.preventDefault());
+  });
 }
+
 function renderVideos(videos){
   const wrap=$('#videoResults');
   if(!wrap) return;
@@ -267,7 +305,7 @@ function renderVideos(videos){
   wrap.innerHTML=`<h3>Video del baile disponible</h3><p class="muted">Compra el video completo de este evento junto con tus fotografías.</p>`+videos.map(video=>`<article class="video-product"><video controls preload="metadata" src="/api/videos/${video.id}/preview"></video><div><strong>${video.title}</strong><span>${money(video.price_cents)}</span><label><input type="checkbox" data-video-id="${video.id}" data-price="${video.price_cents}"> Agregar video al carrito</label></div></article>`).join('');
   $$('[data-video-id]').forEach(box=>box.addEventListener('change',()=>{ box.checked ? videoCart.add(box.dataset.videoId) : videoCart.delete(box.dataset.videoId); updateCart(); }));
 }
-function updateCart(){ $('#cartCount').textContent = cart.size + videoCart.size; const hasPrint=[...cart].some(id=>(photoProducts.get(id)?.product||'digital')!=='digital'); $('#shippingFields')?.classList.toggle('hidden',!hasPrint); }
+function updateCart(){ const count=cart.size+videoCart.size; $('#cartCount').textContent=count; $('#checkoutBtn').classList.toggle('has-items',count>0); const hasPrint=[...cart].some(id=>(photoProducts.get(id)?.product||'digital')!=='digital'); $('#shippingFields')?.classList.toggle('hidden',!hasPrint); }
 
 $('#checkoutBtn').addEventListener('click',()=>{
   if(!cart.size && !videoCart.size){ alert('Select at least one photo or video.'); return; }

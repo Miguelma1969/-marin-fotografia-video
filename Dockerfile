@@ -16,11 +16,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    libglib2.0-0 \
-    libgl1 \
-    libgomp1 \
-    ca-certificates \
+    libglib2.0-0 libgl1 ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt ./
