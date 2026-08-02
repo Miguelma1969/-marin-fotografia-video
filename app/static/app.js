@@ -20,21 +20,73 @@ const originalAttrs = new WeakMap();
 let currentLanguage = localStorage.getItem('facefind-language') || 'es';
 if(!['es','en'].includes(currentLanguage)) currentLanguage='es';
 function translateString(value, lang=currentLanguage){ return (I18N[lang]&&I18N[lang][value]) || (lang==='en' ? value : (I18N.es[value] || value)); }
+let i18nObserver = null;
+let i18nUpdateScheduled = false;
+
 function translatePage(lang){
-  currentLanguage=lang; localStorage.setItem('facefind-language',lang); document.documentElement.lang=lang;
+  currentLanguage=lang;
+  try{ localStorage.setItem('facefind-language',lang); }catch(_error){}
+  document.documentElement.lang=lang;
+
   document.querySelectorAll('body *').forEach(el=>{
-    [...el.childNodes].filter(n=>n.nodeType===Node.TEXT_NODE && n.nodeValue.trim()).forEach(node=>{
-      if(!originalText.has(node)) originalText.set(node,node.nodeValue);
-      const raw=originalText.get(node); const lead=raw.match(/^\s*/)[0], tail=raw.match(/\s*$/)[0], core=raw.trim(); node.nodeValue=lead+translateString(core,lang)+tail;
+    [...el.childNodes]
+      .filter(node=>node.nodeType===Node.TEXT_NODE && node.nodeValue.trim())
+      .forEach(node=>{
+        if(!originalText.has(node)) originalText.set(node,node.nodeValue);
+        const raw=originalText.get(node);
+        const lead=raw.match(/^\s*/)[0];
+        const tail=raw.match(/\s*$/)[0];
+        const core=raw.trim();
+        const translated=lead+translateString(core,lang)+tail;
+        if(node.nodeValue!==translated) node.nodeValue=translated;
+      });
+
+    ['placeholder','aria-label','title'].forEach(attr=>{
+      if(!el.hasAttribute(attr)) return;
+      const map=originalAttrs.get(el)||{};
+      if(!(attr in map)) map[attr]=el.getAttribute(attr);
+      originalAttrs.set(el,map);
+      const translated=translateString(map[attr],lang);
+      if(el.getAttribute(attr)!==translated) el.setAttribute(attr,translated);
     });
-    ['placeholder','aria-label','title'].forEach(attr=>{ if(el.hasAttribute(attr)){ let map=originalAttrs.get(el)||{}; if(!(attr in map)) map[attr]=el.getAttribute(attr); originalAttrs.set(el,map); el.setAttribute(attr,translateString(map[attr],lang)); }});
   });
+
   const toggle=document.querySelector('#languageToggle');
-  if(toggle){ toggle.textContent=lang==='es'?'English':'Español'; toggle.setAttribute('aria-label',lang==='es'?'Cambiar idioma a inglés':'Switch language to Spanish'); }
+  if(toggle){
+    const label=lang==='es'?'English':'Español';
+    const aria=lang==='es'?'Cambiar idioma a inglés':'Switch language to Spanish';
+    if(toggle.textContent!==label) toggle.textContent=label;
+    if(toggle.getAttribute('aria-label')!==aria) toggle.setAttribute('aria-label',aria);
+  }
 }
-window.addEventListener('DOMContentLoaded',()=>{ const toggle=document.querySelector('#languageToggle'); if(toggle){toggle.addEventListener('click',()=>translatePage(currentLanguage==='es'?'en':'es'));} translatePage(currentLanguage); });
-const i18nObserver=new MutationObserver(()=>translatePage(currentLanguage));
-window.addEventListener('DOMContentLoaded',()=>i18nObserver.observe(document.body,{childList:true,subtree:true}));
+
+function observeLanguageChanges(){
+  if(!document.body) return;
+  i18nObserver = new MutationObserver(()=>{
+    if(i18nUpdateScheduled) return;
+    i18nUpdateScheduled=true;
+    requestAnimationFrame(()=>{
+      i18nUpdateScheduled=false;
+      i18nObserver.disconnect();
+      translatePage(currentLanguage);
+      i18nObserver.observe(document.body,{childList:true,subtree:true});
+    });
+  });
+  i18nObserver.observe(document.body,{childList:true,subtree:true});
+}
+
+window.addEventListener('DOMContentLoaded',()=>{
+  const toggle=document.querySelector('#languageToggle');
+  if(toggle){
+    toggle.addEventListener('click',()=>{
+      if(i18nObserver) i18nObserver.disconnect();
+      translatePage(currentLanguage==='es'?'en':'es');
+      if(i18nObserver) i18nObserver.observe(document.body,{childList:true,subtree:true});
+    });
+  }
+  translatePage(currentLanguage);
+  observeLanguageChanges();
+});
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
@@ -443,7 +495,7 @@ $('#installBtn').addEventListener('click',async()=>{
   deferredInstallPrompt.prompt(); await deferredInstallPrompt.userChoice;
   deferredInstallPrompt=null; $('#installBtn').classList.add('hidden');
 });
-if('serviceWorker' in navigator){ navigator.serviceWorker.register('/static/sw.js?v=20260801-pro8').then(reg=>reg.update()).catch(()=>{}); } if('caches' in window){ caches.keys().then(keys=>keys.filter(key=>key==='facefind-v1').forEach(key=>caches.delete(key))); }
+if('serviceWorker' in navigator){ navigator.serviceWorker.register('/static/sw.js?v=20260801-pro81').then(reg=>reg.update()).catch(()=>{}); } if('caches' in window){ caches.keys().then(keys=>keys.filter(key=>key==='facefind-v1').forEach(key=>caches.delete(key))); }
 async function loadPrices(){
   try{
     const data=await api('/api/prices');

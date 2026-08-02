@@ -1,8 +1,8 @@
-const CACHE_NAME = 'marin-pro-v8';
+const CACHE_NAME = 'marin-pro-v81';
 const FALLBACK_ASSETS = [
-  '/manifest.webmanifest?v=20260801-pro8',
-  '/static/styles.css?v=20260801-pro8',
-  '/static/app.js?v=20260801-pro8'
+  '/manifest.webmanifest?v=20260801-pro81',
+  '/static/styles.css?v=20260801-pro81',
+  '/static/app.js?v=20260801-pro81'
 ];
 
 self.addEventListener('install', event => {
