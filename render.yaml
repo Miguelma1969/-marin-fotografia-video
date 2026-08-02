@@ -51,3 +51,15 @@ services:
         sync: false
       - key: PHOTOGRAPHER_EMAIL
         sync: false
+      - key: ZELLE_RECIPIENT
+        value: "713-378-1730"
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_FROM_NUMBER
+        sync: false
+      - key: TWILIO_MESSAGING_SERVICE_SID
+        sync: false
+      - key: PHOTOGRAPHER_PHONE
+        value: "+17133781730"

@@ -14,6 +14,7 @@ import uuid
 from io import BytesIO
 from pathlib import Path
 from typing import Iterable
+from urllib.parse import urlparse
 from email.message import EmailMessage
 
 import numpy as np
@@ -39,8 +40,8 @@ FACE_MAX_IMAGE_DIM = max(640, int(os.getenv("FACE_MAX_IMAGE_DIM", "2000")))
 MATCH_THRESHOLD = float(os.getenv("MATCH_THRESHOLD", "0.42"))
 BRAND_NAME = "Marin Fotografía y Video"
 BRAND_PHONE = "713-378-1730"
-PRINT_PRICES_CENTS = {"8x10": 2500, "11x14": 4000, "13x19": 5500, "16x20": 7500, "20x24": 11000, "24x30": 15000, "24x36": 19000}
-SHIPPING_CENTS = 1295
+DEFAULT_PRINT_PRICES_CENTS = {"8x10": 2500, "11x14": 4000, "13x19": 5500, "16x20": 7500, "20x24": 11000, "24x30": 15000, "24x36": 19000}
+DEFAULT_SHIPPING_CENTS = 1295
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "http://127.0.0.1:8000").rstrip("/")
 ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "").strip()
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "").strip()
@@ -52,6 +53,14 @@ SMTP_PASSWORD = "".join(os.getenv("SMTP_PASSWORD", "").split())
 SMTP_FROM = os.getenv("SMTP_FROM", SMTP_USERNAME or "orders@localhost").strip()
 PHOTOGRAPHER_EMAIL = os.getenv("PHOTOGRAPHER_EMAIL", "").strip()
 ZELLE_RECIPIENT = os.getenv("ZELLE_RECIPIENT", "713-378-1730").strip() or "713-378-1730"
+INSTAGRAM_URL = "https://www.instagram.com/marinfotografiayvideo"
+FACEBOOK_URL = "https://www.facebook.com/marinfotografiahouston"
+WEBSITE_URL = "https://marin-fotografia-video.onrender.com/"
+TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "").strip()
+TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "").strip()
+TWILIO_FROM_NUMBER = os.getenv("TWILIO_FROM_NUMBER", "").strip()
+TWILIO_MESSAGING_SERVICE_SID = os.getenv("TWILIO_MESSAGING_SERVICE_SID", "").strip()
+PHOTOGRAPHER_PHONE = os.getenv("PHOTOGRAPHER_PHONE", "+17133781730").strip() or "+17133781730"
 
 for directory in (DATA_DIR, PHOTO_DIR, SELFIE_DIR, VIDEO_DIR):
     directory.mkdir(parents=True, exist_ok=True)
@@ -107,6 +116,8 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS orders (
                 id TEXT PRIMARY KEY,
                 email TEXT NOT NULL,
+                phone TEXT NOT NULL DEFAULT '',
+                sms_consent INTEGER NOT NULL DEFAULT 0,
                 payment_method TEXT NOT NULL,
                 status TEXT NOT NULL,
                 total_cents INTEGER NOT NULL,
@@ -123,7 +134,8 @@ def init_db() -> None:
                 id TEXT PRIMARY KEY,
                 event_id TEXT NOT NULL,
                 title TEXT NOT NULL,
-                stored_name TEXT NOT NULL,
+                stored_name TEXT NOT NULL DEFAULT '',
+                source_url TEXT NOT NULL DEFAULT '',
                 price_cents INTEGER NOT NULL DEFAULT 7500,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY(event_id) REFERENCES events(id)
@@ -139,6 +151,23 @@ def init_db() -> None:
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY(event_id) REFERENCES events(id)
             );
+
+            CREATE TABLE IF NOT EXISTS product_prices (
+                product_code TEXT PRIMARY KEY,
+                label TEXT NOT NULL,
+                price_cents INTEGER NOT NULL,
+                sort_order INTEGER NOT NULL DEFAULT 0
+            );
+
+            CREATE TABLE IF NOT EXISTS download_events (
+                id TEXT PRIMARY KEY,
+                order_id TEXT NOT NULL,
+                item_type TEXT NOT NULL,
+                item_id TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(order_id) REFERENCES orders(id)
+            );
+
             CREATE TABLE IF NOT EXISTS search_sessions (
                 token TEXT PRIMARY KEY,
                 event_id TEXT NOT NULL,
@@ -147,23 +176,38 @@ def init_db() -> None:
                 FOREIGN KEY(event_id) REFERENCES events(id)
             );
             CREATE INDEX IF NOT EXISTS idx_search_sessions_expiry ON search_sessions(expires_at);
+            CREATE INDEX IF NOT EXISTS idx_download_events_order ON download_events(order_id);
             """
         )
-        columns = {row[1] for row in connection.execute("PRAGMA table_info(orders)").fetchall()}
-        if "video_ids_json" not in columns:
-            connection.execute("ALTER TABLE orders ADD COLUMN video_ids_json TEXT NOT NULL DEFAULT '[]'")
-        if "order_items_json" not in columns:
-            connection.execute("ALTER TABLE orders ADD COLUMN order_items_json TEXT NOT NULL DEFAULT '[]'")
-        if "shipping_json" not in columns:
-            connection.execute("ALTER TABLE orders ADD COLUMN shipping_json TEXT NOT NULL DEFAULT '{}'")
-        if "access_token" not in columns:
-            connection.execute("ALTER TABLE orders ADD COLUMN access_token TEXT NOT NULL DEFAULT ''")
-        if "deletion_requested" not in columns:
-            connection.execute("ALTER TABLE orders ADD COLUMN deletion_requested INTEGER NOT NULL DEFAULT 0")
+        order_columns = {row[1] for row in connection.execute("PRAGMA table_info(orders)").fetchall()}
+        order_migrations = {
+            "video_ids_json": "TEXT NOT NULL DEFAULT '[]'",
+            "order_items_json": "TEXT NOT NULL DEFAULT '[]'",
+            "shipping_json": "TEXT NOT NULL DEFAULT '{}'",
+            "access_token": "TEXT NOT NULL DEFAULT ''",
+            "deletion_requested": "INTEGER NOT NULL DEFAULT 0",
+            "phone": "TEXT NOT NULL DEFAULT ''",
+            "sms_consent": "INTEGER NOT NULL DEFAULT 0",
+        }
+        for column, definition in order_migrations.items():
+            if column not in order_columns:
+                connection.execute(f"ALTER TABLE orders ADD COLUMN {column} {definition}")
+
+        video_columns = {row[1] for row in connection.execute("PRAGMA table_info(videos)").fetchall()}
+        if "source_url" not in video_columns:
+            connection.execute("ALTER TABLE videos ADD COLUMN source_url TEXT NOT NULL DEFAULT ''")
+
         rows = connection.execute("SELECT id FROM orders WHERE access_token = '' OR access_token IS NULL").fetchall()
         for row in rows:
             connection.execute("UPDATE orders SET access_token = ? WHERE id = ?", (uuid.uuid4().hex + uuid.uuid4().hex, row[0]))
 
+        defaults = [(code, f"Print {code}", cents, index * 10) for index, (code, cents) in enumerate(DEFAULT_PRINT_PRICES_CENTS.items(), start=1)]
+        defaults.append(("shipping", "Shipping", DEFAULT_SHIPPING_CENTS, 999))
+        for code, label, cents, sort_order in defaults:
+            connection.execute(
+                "INSERT OR IGNORE INTO product_prices(product_code, label, price_cents, sort_order) VALUES (?, ?, ?, ?)",
+                (code, label, cents, sort_order),
+            )
 
 
 @app.get("/readiness")
@@ -175,6 +219,8 @@ def readiness_check():
         "stripe_webhook_secret": bool(STRIPE_WEBHOOK_SECRET),
         "email_delivery": bool(SMTP_HOST and SMTP_USERNAME and SMTP_PASSWORD and SMTP_FROM),
         "photographer_email": bool(PHOTOGRAPHER_EMAIL),
+        "sms_delivery": bool(TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN and (TWILIO_FROM_NUMBER or TWILIO_MESSAGING_SERVICE_SID)),
+        "photographer_phone": bool(PHOTOGRAPHER_PHONE),
     }
     required = ["https_public_url", "admin_protection"]
     commerce = ["stripe_secret_key", "stripe_webhook_secret"]
@@ -230,46 +276,87 @@ def validate_search_token(token: str, event_id: str) -> None:
         raise HTTPException(403, "This protected preview link has expired. Search the event again.")
 
 
-def send_order_email(order_id: str, recipient: str, status: str, total_cents: int, access_token: str = "", payment_method: str = "") -> bool:
-    """Send an order email and write SMTP failures to Render logs."""
+def get_price_catalog() -> dict:
+    with db() as connection:
+        rows = connection.execute(
+            "SELECT product_code, label, price_cents FROM product_prices ORDER BY sort_order, product_code"
+        ).fetchall()
+    prints = [dict(row) for row in rows if row["product_code"] != "shipping"]
+    shipping = next((row["price_cents"] for row in rows if row["product_code"] == "shipping"), DEFAULT_SHIPPING_CENTS)
+    return {"prints": prints, "shipping_cents": int(shipping)}
+
+
+def print_price_map() -> dict[str, int]:
+    return {item["product_code"]: int(item["price_cents"]) for item in get_price_catalog()["prints"]}
+
+
+def normalize_phone(value: str) -> str:
+    raw = (value or "").strip()
+    digits = "".join(character for character in raw if character.isdigit())
+    if len(digits) == 10:
+        return f"+1{digits}"
+    if len(digits) == 11 and digits.startswith("1"):
+        return f"+{digits}"
+    if raw.startswith("+") and 8 <= len(digits) <= 15:
+        return f"+{digits}"
+    raise HTTPException(400, "Enter a valid mobile phone number.")
+
+
+def valid_http_url(value: str) -> bool:
+    parsed = urlparse((value or "").strip())
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+
+
+def send_sms(recipient: str, body: str) -> bool:
+    if not recipient or not TWILIO_ACCOUNT_SID or not TWILIO_AUTH_TOKEN:
+        print(f"[sms] skipped for {recipient!r}: Twilio is not configured", flush=True)
+        return False
+    if not TWILIO_FROM_NUMBER and not TWILIO_MESSAGING_SERVICE_SID:
+        print("[sms] skipped: set TWILIO_FROM_NUMBER or TWILIO_MESSAGING_SERVICE_SID", flush=True)
+        return False
+    try:
+        from twilio.rest import Client
+        client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+        message_args = {"to": recipient, "body": body}
+        if TWILIO_MESSAGING_SERVICE_SID:
+            message_args["messaging_service_sid"] = TWILIO_MESSAGING_SERVICE_SID
+        else:
+            message_args["from_"] = TWILIO_FROM_NUMBER
+        message = client.messages.create(**message_args)
+        print(f"[sms] queued sid={message.sid} to={recipient}", flush=True)
+        return True
+    except Exception as exc:
+        print(f"[sms] failed for {recipient}: {type(exc).__name__}: {exc}", flush=True)
+        return False
+
+
+def marketing_plain_text() -> str:
+    return (
+        "\n\nCONOCE NUESTROS SERVICIOS\n"
+        "• Invitaciones digitales para quinceañeras y bodas\n"
+        "• Fotografía y video profesional en Houston\n"
+        f"Instagram: {INSTAGRAM_URL}\n"
+        f"Facebook: {FACEBOOK_URL}\n"
+        f"Página web: {WEBSITE_URL}\n"
+    )
+
+
+def marketing_html() -> str:
+    return f"""
+      <div style="margin-top:28px;padding:22px;border-radius:16px;background:#f7f0e5;border:1px solid #ddc59b;">
+        <h2 style="margin:0 0 10px;color:#231b12;">Marin Fotografía y Video</h2>
+        <p style="margin:0 0 14px;color:#4a4035;line-height:1.55;">También ofrecemos invitaciones digitales elegantes, fotografía profesional y video cinematográfico para quinceañeras, bodas y eventos en Houston.</p>
+        <p style="margin:8px 0;"><a href="{WEBSITE_URL}">Visitar nuestra página</a></p>
+        <p style="margin:8px 0;"><a href="{INSTAGRAM_URL}">Instagram: @marinfotografiayvideo</a></p>
+        <p style="margin:8px 0;"><a href="{FACEBOOK_URL}">Facebook: Marin Fotografía Houston</a></p>
+      </div>
+    """
+
+
+def deliver_email_message(msg: EmailMessage, recipient: str) -> bool:
     if not SMTP_HOST or not recipient:
         print(f"[email] skipped: SMTP_HOST or recipient is missing (recipient={recipient!r})", flush=True)
         return False
-
-    released = status in {"paid", "processing_prints", "shipped", "completed"}
-    subject_status = "Your photo is ready to download" if released else "Order received"
-    availability = (
-        "Your payment has been confirmed. Open your private order page below to download your purchased files.\n"
-        if released
-        else "Your order is waiting for payment confirmation. Downloads will appear after the photographer approves payment.\n"
-    )
-    zelle_instructions = ""
-    if payment_method == "zelle" and not released:
-        zelle_instructions = (
-            f"\nZELLE PAYMENT INSTRUCTIONS\n"
-            f"Send: ${total_cents / 100:.2f}\n"
-            f"To: {ZELLE_RECIPIENT}\n"
-            f"Memo: Order {order_id[:8].upper()}\n"
-            f"Verify the recipient in your banking app before sending.\n"
-            f"The photographer will release downloads after confirming the payment.\n"
-        )
-
-    msg = EmailMessage()
-    msg["Subject"] = f"{subject_status} • Marin Fotografía y Video • {order_id[:8].upper()}"
-    msg["From"] = SMTP_FROM
-    msg["To"] = recipient
-    portal_line = f"Private order page: {PUBLIC_BASE_URL}/account/{access_token}\n\n" if access_token else ""
-    msg.set_content(
-        f"Thank you for your order.\n\n"
-        f"Order: {order_id[:8].upper()}\n"
-        f"Status: {status.replace('_', ' ')}\n"
-        f"Total: ${total_cents / 100:.2f}\n\n"
-        f"{availability}"
-        f"{zelle_instructions}\n"
-        f"{portal_line}"
-        f"Marin Fotografía y Video • {BRAND_PHONE}"
-    )
-
     context = ssl.create_default_context()
     try:
         if SMTP_PORT == 465:
@@ -285,20 +372,144 @@ def send_order_email(order_id: str, recipient: str, status: str, total_cents: in
                 if SMTP_USERNAME:
                     server.login(SMTP_USERNAME, SMTP_PASSWORD)
                 server.send_message(msg)
-        print(f"[email] sent to {recipient} for order {order_id[:8].upper()} status={status}", flush=True)
+        print(f"[email] sent to {recipient}", flush=True)
         return True
     except Exception as exc:
-        print(
-            f"[email] failed for {recipient}: {type(exc).__name__}: {exc}",
-            flush=True,
-        )
+        print(f"[email] failed for {recipient}: {type(exc).__name__}: {exc}", flush=True)
         return False
+
+
+def send_photographer_email(subject: str, plain_body: str, html_body: str = "") -> bool:
+    if not PHOTOGRAPHER_EMAIL:
+        return False
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = SMTP_FROM
+    msg["To"] = PHOTOGRAPHER_EMAIL
+    msg.set_content(plain_body)
+    if html_body:
+        msg.add_alternative(html_body, subtype="html")
+    return deliver_email_message(msg, PHOTOGRAPHER_EMAIL)
+
+
+def send_customer_sms(order_id: str, phone: str, status: str, total_cents: int, access_token: str, payment_method: str) -> bool:
+    if not phone:
+        return False
+    released = status in {"paid", "processing_prints", "shipped", "completed"}
+    if released:
+        body = f"Marin Fotografia: Orden {order_id[:8].upper()} lista. Descargas: {PUBLIC_BASE_URL}/account/{access_token}"
+    elif payment_method == "zelle":
+        body = f"Marin Fotografia: Orden {order_id[:8].upper()} por ${total_cents/100:.2f}. Zelle {ZELLE_RECIPIENT}; memo Order {order_id[:8].upper()}."
+    else:
+        body = f"Marin Fotografia: Recibimos la orden {order_id[:8].upper()} por ${total_cents/100:.2f}. Estado: {status.replace('_', ' ')}."
+    return send_sms(phone, body)
+
+
+def notify_new_order(order_id: str, email: str, phone: str, total_cents: int, payment_method: str) -> tuple[bool, bool]:
+    summary = (
+        f"Nueva orden {order_id[:8].upper()}\n"
+        f"Cliente: {email}\n"
+        f"Teléfono: {phone}\n"
+        f"Total: ${total_cents/100:.2f}\n"
+        f"Pago: {payment_method}\n"
+        f"Panel: {PUBLIC_BASE_URL}/#admin\n"
+    )
+    email_sent = send_photographer_email(
+        f"Nueva orden {order_id[:8].upper()} • ${total_cents/100:.2f}",
+        summary,
+        (
+            f"<h2>Nueva orden {order_id[:8].upper()}</h2>"
+            f"<p>Cliente: {email}<br>Teléfono: {phone}<br>Total: ${total_cents/100:.2f}<br>Pago: {payment_method}</p>"
+            f"<p><a href=\"{PUBLIC_BASE_URL}/#admin\">Abrir panel del fotógrafo</a></p>"
+        ),
+    )
+    sms_sent = send_sms(PHOTOGRAPHER_PHONE, f"Nueva orden Marin #{order_id[:8].upper()} ${total_cents/100:.2f} {payment_method}. {email}")
+    return email_sent, sms_sent
+
+
+def record_download(order_id: str, item_type: str, item_id: str, customer_email: str) -> None:
+    with db() as connection:
+        prior = connection.execute(
+            "SELECT COUNT(*) AS count FROM download_events WHERE order_id = ? AND item_type = ? AND item_id = ?",
+            (order_id, item_type, item_id),
+        ).fetchone()["count"]
+        connection.execute(
+            "INSERT INTO download_events(id, order_id, item_type, item_id) VALUES (?, ?, ?, ?)",
+            (uuid.uuid4().hex, order_id, item_type, item_id),
+        )
+    if prior == 0:
+        label = "foto" if item_type == "photo" else "video"
+        plain = (
+            f"Descarga iniciada\n"
+            f"Orden: {order_id[:8].upper()}\n"
+            f"Archivo: {label}\n"
+            f"Cliente: {customer_email}\n"
+        )
+        send_photographer_email(f"Descarga iniciada • Orden {order_id[:8].upper()}", plain)
+        send_sms(PHOTOGRAPHER_PHONE, f"Marin: descarga iniciada de {label}, orden #{order_id[:8].upper()}, cliente {customer_email}.")
+
+
+def send_order_email(order_id: str, recipient: str, status: str, total_cents: int, access_token: str = "", payment_method: str = "") -> bool:
+    """Send bilingual transactional email with a secondary marketing section."""
+    released = status in {"paid", "processing_prints", "shipped", "completed"}
+    subject_status = "Tu compra está lista / Your order is ready" if released else "Orden recibida / Order received"
+    availability_es = (
+        "Tu pago fue confirmado. Abre tu página privada para descargar tus archivos."
+        if released else
+        "Tu orden está esperando confirmación de pago. Las descargas aparecerán cuando el fotógrafo la apruebe."
+    )
+    availability_en = (
+        "Your payment was confirmed. Open your private page to download your files."
+        if released else
+        "Your order is waiting for payment confirmation. Downloads appear after photographer approval."
+    )
+    portal_url = f"{PUBLIC_BASE_URL}/account/{access_token}" if access_token else PUBLIC_BASE_URL
+    zelle_plain = ""
+    zelle_html = ""
+    if payment_method == "zelle" and not released:
+        zelle_plain = f"\nZELLE: Envía ${total_cents/100:.2f} a {ZELLE_RECIPIENT}. Memo: Order {order_id[:8].upper()}.\n"
+        zelle_html = f"<div style='padding:14px;background:#fff7dc;border-radius:12px'><strong>Pago con Zelle</strong><p>Envía ${total_cents/100:.2f} a <strong>{ZELLE_RECIPIENT}</strong><br>Memo: <strong>Order {order_id[:8].upper()}</strong></p></div>"
+
+    plain = (
+        f"Gracias por tu compra / Thank you for your order.\n\n"
+        f"Orden / Order: {order_id[:8].upper()}\n"
+        f"Estado / Status: {status.replace('_', ' ')}\n"
+        f"Total: ${total_cents/100:.2f}\n\n"
+        f"{availability_es}\n{availability_en}\n"
+        f"{zelle_plain}\n"
+        f"Página privada / Private order page: {portal_url}\n"
+        f"{marketing_plain_text()}\n"
+        f"Marin Fotografía y Video • {BRAND_PHONE}"
+    )
+    html = f"""
+    <html><body style="font-family:Arial,sans-serif;background:#f3f3f3;padding:24px;color:#222;">
+      <div style="max-width:640px;margin:auto;background:#fff;border-radius:18px;padding:28px;border:1px solid #ddd;">
+        <p style="letter-spacing:.12em;color:#9a742e;font-weight:bold;">MARIN FOTOGRAFÍA Y VIDEO</p>
+        <h1 style="font-family:Georgia,serif;">{subject_status}</h1>
+        <p><strong>Orden / Order:</strong> {order_id[:8].upper()}<br><strong>Estado / Status:</strong> {status.replace('_', ' ')}<br><strong>Total:</strong> ${total_cents/100:.2f}</p>
+        <p>{availability_es}<br>{availability_en}</p>
+        {zelle_html}
+        <p style="margin:24px 0;"><a href="{portal_url}" style="background:#111;color:#fff;padding:14px 20px;border-radius:10px;text-decoration:none;display:inline-block;">Abrir mi orden / Open my order</a></p>
+        {marketing_html()}
+        <p style="margin-top:24px;color:#666;font-size:13px;">Marin Fotografía y Video • {BRAND_PHONE}<br>Este mensaje se relaciona con una orden realizada en nuestra página.</p>
+      </div>
+    </body></html>
+    """
+    msg = EmailMessage()
+    msg["Subject"] = f"{subject_status} • {order_id[:8].upper()}"
+    msg["From"] = SMTP_FROM
+    msg["To"] = recipient
+    msg.set_content(plain)
+    msg.add_alternative(html, subtype="html")
+    return deliver_email_message(msg, recipient)
 
 
 def serialize_order(row: sqlite3.Row) -> dict:
     return {
         "id": row["id"],
         "email": row["email"],
+        "phone": row["phone"] if "phone" in row.keys() else "",
+        "sms_consent": bool(row["sms_consent"]) if "sms_consent" in row.keys() else False,
         "payment_method": row["payment_method"],
         "status": row["status"],
         "total_cents": row["total_cents"],
@@ -308,6 +519,8 @@ def serialize_order(row: sqlite3.Row) -> dict:
         "shipping": json.loads(row["shipping_json"] or "{}"),
         "access_token": row["access_token"] if "access_token" in row.keys() else "",
         "deletion_requested": bool(row["deletion_requested"]) if "deletion_requested" in row.keys() else False,
+        "download_count": int(row["download_count"]) if "download_count" in row.keys() and row["download_count"] is not None else 0,
+        "last_download_at": row["last_download_at"] if "last_download_at" in row.keys() else None,
         "created_at": row["created_at"],
     }
 
@@ -616,12 +829,52 @@ def manifest():
     return FileResponse(BASE_DIR / "app" / "static" / "manifest.webmanifest", media_type="application/manifest+json")
 
 
+@app.get("/api/prices")
+def public_prices():
+    return get_price_catalog()
+
+
+@app.get("/api/admin/prices")
+def admin_prices(request: Request):
+    require_admin(request)
+    return get_price_catalog()
+
+
+@app.patch("/api/admin/prices")
+def update_prices(payload: dict, request: Request):
+    require_admin(request)
+    prices = payload.get("prices") or {}
+    shipping_cents = payload.get("shipping_cents")
+    allowed = set(DEFAULT_PRINT_PRICES_CENTS)
+    with db() as connection:
+        for code, raw_value in prices.items():
+            if code not in allowed:
+                continue
+            cents = max(0, int(raw_value))
+            connection.execute("UPDATE product_prices SET price_cents = ? WHERE product_code = ?", (cents, code))
+        if shipping_cents is not None:
+            connection.execute("UPDATE product_prices SET price_cents = ? WHERE product_code = 'shipping'", (max(0, int(shipping_cents)),))
+    return {"ok": True, **get_price_catalog()}
+
+
+@app.patch("/api/admin/events/{event_id}/price")
+def update_event_price(event_id: str, payload: dict, request: Request):
+    require_admin(request)
+    price_cents = max(0, int(payload.get("price_cents") or 0))
+    with db() as connection:
+        result = connection.execute("UPDATE events SET price_cents = ? WHERE id = ?", (price_cents, event_id))
+        if result.rowcount == 0:
+            raise HTTPException(404, "Event not found.")
+    return {"ok": True, "event_id": event_id, "price_cents": price_cents}
+
+
 @app.get("/api/events")
 def list_events():
     with db() as connection:
         rows = connection.execute(
             """
-            SELECT e.*, COUNT(p.id) AS photo_count
+            SELECT e.*, COUNT(p.id) AS photo_count,
+                   (SELECT COUNT(*) FROM videos v WHERE v.event_id = e.id) AS video_count
             FROM events e
             LEFT JOIN photos p ON p.event_id = e.id
             GROUP BY e.id
@@ -722,30 +975,28 @@ async def upload_photos(event_id: str, files: list[UploadFile] = File(...)):
 
 
 @app.post("/api/events/{event_id}/videos")
-async def upload_event_video(
+def add_event_video_link(
     event_id: str,
-    title: str = Form("Video del baile"),
+    title: str = Form("Video completo del baile"),
     price: float = Form(75.0),
-    video: UploadFile = File(...),
+    video_url: str = Form(...),
 ):
     with db() as connection:
         event = connection.execute("SELECT id FROM events WHERE id = ?", (event_id,)).fetchone()
     if event is None:
         raise HTTPException(404, "Event not found.")
-    suffix = Path(video.filename or "dance-video.mp4").suffix.lower()
-    if suffix not in {".mp4", ".mov", ".m4v", ".webm"}:
-        raise HTTPException(400, "Upload MP4, MOV, M4V, or WebM video.")
+    clean_url = video_url.strip()
+    if not valid_http_url(clean_url):
+        raise HTTPException(400, "Enter a complete video link beginning with https:// or http://.")
     video_id = uuid.uuid4().hex
-    stored_name = f"{video_id}{suffix}"
-    with (VIDEO_DIR / stored_name).open("wb") as output:
-        shutil.copyfileobj(video.file, output)
     price_cents = max(0, int(round(price * 100)))
+    clean_title = title.strip() or "Video completo del baile"
     with db() as connection:
         connection.execute(
-            "INSERT INTO videos(id, event_id, title, stored_name, price_cents) VALUES (?, ?, ?, ?, ?)",
-            (video_id, event_id, title.strip() or "Video del baile", stored_name, price_cents),
+            "INSERT INTO videos(id, event_id, title, stored_name, source_url, price_cents) VALUES (?, ?, ?, '', ?, ?)",
+            (video_id, event_id, clean_title, clean_url, price_cents),
         )
-    return {"ok": True, "id": video_id, "title": title, "price_cents": price_cents}
+    return {"ok": True, "id": video_id, "title": clean_title, "price_cents": price_cents}
 
 
 @app.post("/api/search")
@@ -797,15 +1048,13 @@ async def search_faces(
     search_token = issue_search_token(event_id)
     for match in matches:
         match["preview_url"] = f"/api/photos/{match['id']}/preview?token={search_token}"
-    protected_videos = []
-    for video in videos:
-        item = dict(video)
-        item["preview_url"] = f"/api/videos/{item['id']}/preview?token={search_token}"
-        protected_videos.append(item)
+    catalog = get_price_catalog()
     return {
         "event": dict(event),
         "matches": matches,
-        "videos": protected_videos,
+        "videos": [dict(video) for video in videos],
+        "print_prices": catalog["prints"],
+        "shipping_cents": catalog["shipping_cents"],
         "search_token": search_token,
         "threshold": MATCH_THRESHOLD,
         "preview_expires_in": 1800,
@@ -851,7 +1100,7 @@ def photo_signature_preview(photo_id: str, request: Request):
 def download_purchased_digital(order_id: str, photo_id: str):
     """Release a full-resolution branded digital only after the order is marked paid."""
     with db() as connection:
-        order = connection.execute("SELECT status, photo_ids_json FROM orders WHERE id = ?", (order_id,)).fetchone()
+        order = connection.execute("SELECT status, photo_ids_json, email FROM orders WHERE id = ?", (order_id,)).fetchone()
         photo = connection.execute("SELECT stored_name, original_name FROM photos WHERE id = ?", (photo_id,)).fetchone()
     if order is None or photo is None:
         raise HTTPException(404, "Order or photo not found.")
@@ -877,6 +1126,7 @@ def download_purchased_digital(order_id: str, photo_id: str):
             output.unlink(missing_ok=True)
             raise HTTPException(503, "The download is being prepared. Please try again in a moment.") from exc
     safe_name = Path(photo["original_name"]).stem or "marin-photo"
+    record_download(order_id, "photo", photo_id, order["email"])
     return FileResponse(
         output,
         media_type="image/jpeg",
@@ -888,31 +1138,31 @@ def download_purchased_digital(order_id: str, photo_id: str):
 @app.get("/api/videos/{video_id}/preview")
 def video_preview(video_id: str, token: str = ""):
     with db() as connection:
-        video = connection.execute(
-            "SELECT event_id, stored_name FROM videos WHERE id = ?",
-            (video_id,),
-        ).fetchone()
+        video = connection.execute("SELECT event_id, stored_name FROM videos WHERE id = ?", (video_id,)).fetchone()
     if video is None:
         raise HTTPException(404, "Video not found.")
     validate_search_token(token, video["event_id"])
-    return FileResponse(
-        VIDEO_DIR / video["stored_name"],
-        media_type="video/mp4",
-        headers={"Cache-Control": "private, no-store, max-age=0", "Content-Disposition": "inline"},
-    )
+    if not video["stored_name"]:
+        raise HTTPException(404, "This product uses a protected external delivery link and has no public preview.")
+    return FileResponse(VIDEO_DIR / video["stored_name"], media_type="video/mp4", headers={"Cache-Control": "private, no-store, max-age=0"})
 
 
 @app.get("/api/orders/{order_id}/videos/{video_id}/download")
 def download_purchased_video(order_id: str, video_id: str):
     with db() as connection:
-        order = connection.execute("SELECT status, video_ids_json FROM orders WHERE id = ?", (order_id,)).fetchone()
-        video = connection.execute("SELECT stored_name, title FROM videos WHERE id = ?", (video_id,)).fetchone()
+        order = connection.execute("SELECT status, video_ids_json, email FROM orders WHERE id = ?", (order_id,)).fetchone()
+        video = connection.execute("SELECT stored_name, source_url, title FROM videos WHERE id = ?", (video_id,)).fetchone()
     if order is None or video is None:
         raise HTTPException(404, "Order or video not found.")
     if order["status"] not in {"paid", "processing_prints", "shipped", "completed"}:
         raise HTTPException(403, "This video is released only after payment is confirmed.")
     if video_id not in json.loads(order["video_ids_json"] or "[]"):
         raise HTTPException(403, "This video is not part of the order.")
+    record_download(order_id, "video", video_id, order["email"])
+    if video["source_url"]:
+        if not valid_http_url(video["source_url"]):
+            raise HTTPException(500, "The saved video link is invalid. Contact the photographer.")
+        return RedirectResponse(video["source_url"], status_code=302)
     filename = f"{video['title']}-Marin-Fotografia-y-Video{Path(video['stored_name']).suffix}"
     return FileResponse(VIDEO_DIR / video["stored_name"], filename=filename)
 
@@ -921,7 +1171,16 @@ def download_purchased_video(order_id: str, video_id: str):
 def admin_orders(request: Request):
     require_admin(request)
     with db() as connection:
-        rows = connection.execute("SELECT * FROM orders ORDER BY created_at DESC LIMIT 250").fetchall()
+        rows = connection.execute(
+            """
+            SELECT o.*,
+                   (SELECT COUNT(*) FROM download_events d WHERE d.order_id = o.id) AS download_count,
+                   (SELECT MAX(created_at) FROM download_events d WHERE d.order_id = o.id) AS last_download_at
+            FROM orders o
+            ORDER BY o.created_at DESC
+            LIMIT 250
+            """
+        ).fetchall()
     return {"orders": [serialize_order(row) for row in rows]}
 
 
@@ -938,7 +1197,8 @@ def update_order_status(order_id: str, payload: dict, request: Request):
             raise HTTPException(404, "Order not found.")
         connection.execute("UPDATE orders SET status = ? WHERE id = ?", (status, order_id))
     emailed = send_order_email(order_id, row["email"], status, row["total_cents"], row["access_token"], row["payment_method"])
-    return {"ok": True, "order_id": order_id, "status": status, "email_sent": emailed}
+    sms_sent = send_customer_sms(order_id, row["phone"], status, row["total_cents"], row["access_token"], row["payment_method"]) if row["sms_consent"] else False
+    return {"ok": True, "order_id": order_id, "status": status, "email_sent": emailed, "sms_sent": sms_sent}
 
 
 @app.post("/api/admin/email-test")
@@ -951,6 +1211,16 @@ def admin_email_test(payload: dict, request: Request):
     if not sent:
         raise HTTPException(502, "Email test failed. Open Render Logs and look for a line beginning with [email] failed.")
     return {"ok": True, "email_sent": True, "recipient": recipient}
+
+
+@app.post("/api/admin/sms-test")
+def admin_sms_test(payload: dict, request: Request):
+    require_admin(request)
+    recipient = normalize_phone(str(payload.get("phone") or PHOTOGRAPHER_PHONE))
+    sent = send_sms(recipient, "Prueba de Marin Fotografia y Video: las notificaciones SMS están configuradas.")
+    if not sent:
+        raise HTTPException(502, "SMS test failed. Check Twilio variables and Render Logs for [sms].")
+    return {"ok": True, "sms_sent": True, "recipient": recipient}
 
 
 @app.post("/api/stripe/webhook")
@@ -976,7 +1246,9 @@ async def stripe_webhook(request: Request):
                 if row:
                     connection.execute("UPDATE orders SET status = 'paid' WHERE id = ?", (order_id,))
             if row:
-                send_order_email(order_id, row["email"], "paid", row["total_cents"], row["access_token"])
+                send_order_email(order_id, row["email"], "paid", row["total_cents"], row["access_token"], row["payment_method"])
+                if row["sms_consent"]:
+                    send_customer_sms(order_id, row["phone"], "paid", row["total_cents"], row["access_token"], row["payment_method"])
     return {"received": True}
 
 
@@ -985,16 +1257,22 @@ def checkout(payload: dict):
     photo_items = payload.get("photo_items") or []
     video_ids = list(dict.fromkeys(payload.get("video_ids") or []))
     payment_method = str(payload.get("payment_method") or "card").strip().lower()
-    email = str(payload.get("email") or "").strip()
+    email = str(payload.get("email") or "").strip().lower()
+    email_confirm = str(payload.get("email_confirm") or "").strip().lower()
+    phone = normalize_phone(str(payload.get("phone") or ""))
+    phone_confirm = normalize_phone(str(payload.get("phone_confirm") or ""))
+    sms_consent = bool(payload.get("sms_consent"))
     shipping = payload.get("shipping") or {}
     allowed_methods = {"card", "apple_pay", "google_pay", "paypal", "cash", "zelle"}
 
+    prices = print_price_map()
+    shipping_cents = get_price_catalog()["shipping_cents"]
     normalized_items = []
     for item in photo_items:
         photo_id = str(item.get("photo_id") or "")
         product = str(item.get("product") or "digital")
         quantity = max(1, min(20, int(item.get("quantity") or 1)))
-        if not photo_id or (product != "digital" and product not in PRINT_PRICES_CENTS):
+        if not photo_id or (product != "digital" and product not in prices):
             raise HTTPException(400, "Invalid photo product selection.")
         normalized_items.append({"photo_id": photo_id, "product": product, "quantity": quantity})
 
@@ -1004,6 +1282,12 @@ def checkout(payload: dict):
         raise HTTPException(400, "Unsupported payment method.")
     if "@" not in email or len(email) > 254:
         raise HTTPException(400, "A valid receipt email is required.")
+    if email != email_confirm:
+        raise HTTPException(400, "The two email addresses do not match.")
+    if phone != phone_confirm:
+        raise HTTPException(400, "The two phone numbers do not match.")
+    if not sms_consent:
+        raise HTTPException(400, "Consent is required to send order text-message updates.")
 
     photo_ids = list(dict.fromkeys(item["photo_id"] for item in normalized_items))
     with db() as connection:
@@ -1024,7 +1308,7 @@ def checkout(payload: dict):
     total = 0
     requires_shipping = False
     for item in normalized_items:
-        unit = photo_price[item["photo_id"]] if item["product"] == "digital" else PRINT_PRICES_CENTS[item["product"]]
+        unit = photo_price[item["photo_id"]] if item["product"] == "digital" else prices[item["product"]]
         item["unit_price_cents"] = unit
         total += unit * item["quantity"]
         requires_shipping = requires_shipping or item["product"] != "digital"
@@ -1034,7 +1318,7 @@ def checkout(payload: dict):
         required = ["name", "address", "city", "state", "postal_code", "country"]
         if any(not str(shipping.get(field) or "").strip() for field in required):
             raise HTTPException(400, "Complete the shipping address for printed products.")
-        total += SHIPPING_CENTS
+        total += shipping_cents
     else:
         shipping = {}
 
@@ -1045,8 +1329,8 @@ def checkout(payload: dict):
     digital_photo_ids = [item["photo_id"] for item in normalized_items if item["product"] == "digital"]
     with db() as connection:
         connection.execute(
-            "INSERT INTO orders(id, email, payment_method, status, total_cents, photo_ids_json, video_ids_json, order_items_json, shipping_json, access_token) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (order_id, email, payment_method, status, total, json.dumps(digital_photo_ids), json.dumps(video_ids), json.dumps(normalized_items), json.dumps(shipping), access_token),
+            "INSERT INTO orders(id, email, phone, sms_consent, payment_method, status, total_cents, photo_ids_json, video_ids_json, order_items_json, shipping_json, access_token) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (order_id, email, phone, int(sms_consent), payment_method, status, total, json.dumps(digital_photo_ids), json.dumps(video_ids), json.dumps(normalized_items), json.dumps(shipping), access_token),
         )
 
     provider_names = {"card":"Stripe card checkout","apple_pay":"Apple Pay through Stripe","google_pay":"Google Pay through Stripe","paypal":"PayPal Checkout","cash":"cash payment","zelle":"Zelle/manual transfer"}
@@ -1075,8 +1359,8 @@ def checkout(payload: dict):
         message = f"Demo order created for {provider_names[payment_method]}. Connect merchant credentials to charge the customer."
 
     emailed = send_order_email(order_id, email, status, total, access_token, payment_method)
-    if PHOTOGRAPHER_EMAIL:
-        send_order_email(order_id, PHOTOGRAPHER_EMAIL, status, total, access_token, payment_method)
+    sms_sent = send_customer_sms(order_id, phone, status, total, access_token, payment_method)
+    photographer_email_sent, photographer_sms_sent = notify_new_order(order_id, email, phone, total, payment_method)
     zelle_payment = None
     if payment_method == "zelle":
         zelle_payment = {
@@ -1084,4 +1368,4 @@ def checkout(payload: dict):
             "amount_cents": total,
             "memo": f"Order {order_id[:8].upper()}",
         }
-    return JSONResponse({"ok":True,"mode":mode,"order_id":order_id,"payment_method":payment_method,"status":status,"message":message,"items":len(normalized_items)+len(video_rows),"total_cents":total,"shipping_cents":SHIPPING_CENTS if requires_shipping else 0,"redirect_url":redirect_url,"email_sent":emailed,"customer_portal_url":f"{PUBLIC_BASE_URL}/account/{access_token}","zelle_payment":zelle_payment})
+    return JSONResponse({"ok":True,"mode":mode,"order_id":order_id,"payment_method":payment_method,"status":status,"message":message,"items":len(normalized_items)+len(video_rows),"total_cents":total,"shipping_cents":shipping_cents if requires_shipping else 0,"redirect_url":redirect_url,"email_sent":emailed,"sms_sent":sms_sent,"photographer_email_sent":photographer_email_sent,"photographer_sms_sent":photographer_sms_sent,"customer_portal_url":f"{PUBLIC_BASE_URL}/account/{access_token}","zelle_payment":zelle_payment})

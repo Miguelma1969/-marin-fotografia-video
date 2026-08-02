@@ -10,3 +10,5 @@ onnxruntime==1.22.1
 qrcode[pil]==8.2
 
 stripe==12.4.0
+
+twilio>=9.0,<10

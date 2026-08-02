@@ -9,6 +9,8 @@ checks = {
     "STRIPE_WEBHOOK_SECRET configured": bool(os.getenv("STRIPE_WEBHOOK_SECRET")),
     "SMTP email configured": all(os.getenv(k) for k in ("SMTP_HOST", "SMTP_USERNAME", "SMTP_PASSWORD", "SMTP_FROM")),
     "PHOTOGRAPHER_EMAIL configured": bool(os.getenv("PHOTOGRAPHER_EMAIL")),
+    "Twilio SMS configured": bool(os.getenv("TWILIO_ACCOUNT_SID") and os.getenv("TWILIO_AUTH_TOKEN") and (os.getenv("TWILIO_FROM_NUMBER") or os.getenv("TWILIO_MESSAGING_SERVICE_SID"))),
+    "PHOTOGRAPHER_PHONE configured": bool(os.getenv("PHOTOGRAPHER_PHONE")),
 }
 for name, ok in checks.items():
     print(f"{'PASS' if ok else 'MISSING'}: {name}")

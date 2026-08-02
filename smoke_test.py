@@ -1,7 +1,7 @@
 from fastapi.testclient import TestClient
 from app.main import app
 
-PATHS = ["/", "/health", "/privacy", "/terms", "/biometric-consent", "/api/events"]
+PATHS = ["/", "/health", "/privacy", "/terms", "/biometric-consent", "/api/events", "/api/prices"]
 
 with TestClient(app) as client:
     failures = []

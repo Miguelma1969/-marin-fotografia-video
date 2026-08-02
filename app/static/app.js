@@ -9,7 +9,7 @@ const I18N = {
     'Create event':'Crear evento','Event name':'Nombre del evento','Date':'Fecha','Location':'Ubicación','Price per digital photo':'Precio por foto digital','Consent notice':'Aviso de consentimiento','Upload event photos':'Subir fotos del evento','Select event photos':'Seleccionar fotos del evento','Analyze and upload':'Analizar y subir','Upload dance video':'Subir video del baile','Video title':'Título del video','Video price':'Precio del video','Select dance video':'Seleccionar video del baile','Upload video for sale':'Subir video para vender','Events':'Eventos','Refresh':'Actualizar',
     'SECURE CHECKOUT':'PAGO SEGURO','Choose payment method':'Elige el método de pago','Credit or debit card':'Tarjeta de crédito o débito','Apple Pay':'Apple Pay','Google Pay':'Google Pay','PayPal':'PayPal','Cash at event':'Efectivo en el evento','Zelle / manual transfer':'Zelle / transferencia manual','Email for receipt':'Correo para el recibo','Continue to payment':'Continuar al pago','Add image to cart':'Agregar imagen al carrito','Remove from cart':'Quitar del carrito','Add all photos':'Agregar todas las fotos','Clear cart':'Vaciar carrito','Protected preview':'Vista protegida','Selected':'Seleccionada','Selected product':'Producto seleccionado','Full-resolution files unlock only after payment.':'Los archivos en alta resolución se habilitan únicamente después del pago.'
   },
-  en: {},
+  en: {'Correo electrónico':'Email address','Repetir correo electrónico':'Confirm email address','Número de teléfono':'Phone number','Repetir número de teléfono':'Confirm phone number','Acepto recibir mensajes de texto transaccionales sobre esta orden. Pueden aplicar tarifas de mensajes y datos. Responde STOP para dejar de recibirlos.':'I agree to receive transactional text messages about this order. Message and data rates may apply. Reply STOP to opt out.','Guardar video para vender':'Save video for sale','Enlace privado del video':'Private video link','Agregar enlace del video del baile':'Add dance video link','Precio del video':'Video price','Título del video':'Video title','Evento':'Event'},
   fr: {'Find my photos':'Trouver mes photos','Install app':'Installer l’application','Explore services':'Découvrir les services','Find event photos':'Trouver les photos de l’événement','Contactar por WhatsApp':'Contacter sur WhatsApp','OUR SERVICES':'NOS SERVICES','Request information':'Demander des informations','Search my photos':'Rechercher mes photos','View invitation demos':'Voir les démos','Open demo':'Ouvrir la démo','Order':'Commander','BOOK YOUR DATE':'RÉSERVEZ VOTRE DATE','Service':'Service','Name':'Nom','Phone or email':'Téléphone ou e-mail','Event date':'Date de l’événement','Customer search':'Recherche client','Photographer dashboard':'Tableau de bord photographe','Event':'Événement','Open camera and take selfie':'Ouvrir la caméra et prendre un selfie','Upload an existing selfie':'Téléverser un selfie','Take photo':'Prendre la photo','Cancel':'Annuler','Retake':'Reprendre','Start facial recognition':'Lancer la reconnaissance faciale','Your matches':'Vos correspondances','Checkout':'Paiement','Create event':'Créer un événement','Date':'Date','Location':'Lieu','Events':'Événements','Refresh':'Actualiser','Choose payment method':'Choisir le moyen de paiement','Continue to payment':'Continuer vers le paiement'},
   it: {'Find my photos':'Trova le mie foto','Install app':'Installa app','Explore services':'Scopri i servizi','Find event photos':'Trova foto dell’evento','Contactar por WhatsApp':'Contatta su WhatsApp','OUR SERVICES':'I NOSTRI SERVIZI','Request information':'Richiedi informazioni','Search my photos':'Cerca le mie foto','View invitation demos':'Guarda le demo','Open demo':'Apri demo','Order':'Ordina','BOOK YOUR DATE':'PRENOTA LA DATA','Service':'Servizio','Name':'Nome','Phone or email':'Telefono o e-mail','Event date':'Data evento','Customer search':'Ricerca cliente','Photographer dashboard':'Pannello fotografo','Event':'Evento','Open camera and take selfie':'Apri la fotocamera e scatta un selfie','Upload an existing selfie':'Carica un selfie','Take photo':'Scatta foto','Cancel':'Annulla','Retake':'Ripeti','Start facial recognition':'Avvia riconoscimento facciale','Your matches':'Le tue corrispondenze','Checkout':'Pagamento','Create event':'Crea evento','Date':'Data','Location':'Luogo','Events':'Eventi','Refresh':'Aggiorna','Choose payment method':'Scegli il metodo di pagamento','Continue to payment':'Continua al pagamento'},
   pt: {'Find my photos':'Encontrar minhas fotos','Install app':'Instalar app','Explore services':'Ver serviços','Find event photos':'Encontrar fotos do evento','Contactar por WhatsApp':'Falar pelo WhatsApp','OUR SERVICES':'NOSSOS SERVIÇOS','Request information':'Solicitar informações','Search my photos':'Buscar minhas fotos','View invitation demos':'Ver demonstrações','Open demo':'Abrir demonstração','Order':'Pedir','BOOK YOUR DATE':'RESERVE SUA DATA','Service':'Serviço','Name':'Nome','Phone or email':'Telefone ou e-mail','Event date':'Data do evento','Customer search':'Busca do cliente','Photographer dashboard':'Painel do fotógrafo','Event':'Evento','Open camera and take selfie':'Abrir câmera e tirar selfie','Upload an existing selfie':'Enviar uma selfie','Take photo':'Tirar foto','Cancel':'Cancelar','Retake':'Tirar novamente','Start facial recognition':'Iniciar reconhecimento facial','Your matches':'Suas correspondências','Checkout':'Pagamento','Create event':'Criar evento','Date':'Data','Location':'Local','Events':'Eventos','Refresh':'Atualizar','Choose payment method':'Escolha a forma de pagamento','Continue to payment':'Continuar para pagamento'},
@@ -17,8 +17,8 @@ const I18N = {
 };
 const originalText = new WeakMap();
 const originalAttrs = new WeakMap();
-let currentLanguage = localStorage.getItem('facefind-language') || ((navigator.language||'es').slice(0,2));
-if(!I18N[currentLanguage]) currentLanguage='es';
+let currentLanguage = localStorage.getItem('facefind-language') || 'es';
+if(!['es','en'].includes(currentLanguage)) currentLanguage='es';
 function translateString(value, lang=currentLanguage){ return (I18N[lang]&&I18N[lang][value]) || (lang==='en' ? value : (I18N.es[value] || value)); }
 function translatePage(lang){
   currentLanguage=lang; localStorage.setItem('facefind-language',lang); document.documentElement.lang=lang;
@@ -29,9 +29,10 @@ function translatePage(lang){
     });
     ['placeholder','aria-label','title'].forEach(attr=>{ if(el.hasAttribute(attr)){ let map=originalAttrs.get(el)||{}; if(!(attr in map)) map[attr]=el.getAttribute(attr); originalAttrs.set(el,map); el.setAttribute(attr,translateString(map[attr],lang)); }});
   });
-  const picker=document.querySelector('#languageSelect'); if(picker) picker.value=lang;
+  const toggle=document.querySelector('#languageToggle');
+  if(toggle){ toggle.textContent=lang==='es'?'English':'Español'; toggle.setAttribute('aria-label',lang==='es'?'Cambiar idioma a inglés':'Switch language to Spanish'); }
 }
-window.addEventListener('DOMContentLoaded',()=>{ const picker=document.querySelector('#languageSelect'); if(picker){picker.value=currentLanguage; picker.addEventListener('change',e=>translatePage(e.target.value));} translatePage(currentLanguage); });
+window.addEventListener('DOMContentLoaded',()=>{ const toggle=document.querySelector('#languageToggle'); if(toggle){toggle.addEventListener('click',()=>translatePage(currentLanguage==='es'?'en':'es'));} translatePage(currentLanguage); });
 const i18nObserver=new MutationObserver(()=>translatePage(currentLanguage));
 window.addEventListener('DOMContentLoaded',()=>i18nObserver.observe(document.body,{childList:true,subtree:true}));
 
@@ -43,6 +44,8 @@ let photoProducts = new Map();
 let deferredInstallPrompt = null;
 let cameraStream = null;
 let capturedSelfie = null;
+let priceCatalog = [];
+let shippingCents = 1295;
 const lockedEventId = document.body.dataset.eventId || new URLSearchParams(location.search).get('event') || '';
 
 function money(cents){ return new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(cents/100); }
@@ -88,14 +91,25 @@ async function loadEvents(){
     <div class="event-item event-with-qr">
       <div>
         <strong>${e.name}</strong>
-        <div class="muted">${e.event_date || 'No date'} • ${e.location || 'No location'}</div>
+        <div class="muted">${e.event_date || 'Sin fecha'} • ${e.location || 'Sin ubicación'}</div>
+        <div class="event-price-editor"><label>Foto digital $<input type="number" min="0" step="0.01" value="${(e.price_cents/100).toFixed(2)}" data-event-price="${e.id}"></label><button type="button" class="secondary" data-save-event-price="${e.id}">Guardar precio</button></div>
         <div class="event-actions">
-          <a class="button-link secondary" href="${eventUrl}" target="_blank">Open guest page</a>
-          <a class="button-link" href="/api/events/${e.id}/qr" download="${e.name.replace(/[^a-z0-9]+/gi,'-').toLowerCase()}-qr.png">Download QR</a>
+          <a class="button-link secondary" href="${eventUrl}" target="_blank">Abrir página del cliente</a>
+          <a class="button-link" href="/api/events/${e.id}/qr" download="${e.name.replace(/[^a-z0-9]+/gi,'-').toLowerCase()}-qr.png">Descargar QR</a>
         </div>
       </div>
-      <div class="qr-box"><img src="/api/events/${e.id}/qr" alt="QR code for ${e.name}"><strong>${e.photo_count}</strong><span class="muted">photos</span></div>
-    </div>`}).join('') : '<p class="muted">No events yet.</p>';
+      <div class="qr-box"><img src="/api/events/${e.id}/qr" alt="QR code for ${e.name}"><strong>${e.photo_count}</strong><span class="muted">fotos • ${e.video_count||0} video</span></div>
+    </div>`}).join('') : '<p class="muted">No hay eventos todavía.</p>';
+  $$('[data-save-event-price]').forEach(button=>button.addEventListener('click',async()=>{
+    const eventId=button.dataset.saveEventPrice;
+    const input=document.querySelector(`[data-event-price="${eventId}"]`);
+    button.disabled=true;
+    try{
+      const result=await api(`/api/admin/events/${eventId}/price`,{method:'PATCH',headers:{'Content-Type':'application/json',...adminHeaders()},body:JSON.stringify({price_cents:Math.round(Number(input.value||0)*100)})});
+      setStatus($('#eventStatus'),`Precio digital actualizado a ${money(result.price_cents)}.`,'success');
+    }catch(error){setStatus($('#eventStatus'),error.message,'error');}
+    finally{button.disabled=false;}
+  }));
 }
 
 $$('.tab').forEach(button=>button.addEventListener('click',()=>{
@@ -139,12 +153,21 @@ $('#uploadForm').addEventListener('submit', async (event)=>{
 $('#videoUploadForm')?.addEventListener('submit', async(event)=>{
   event.preventDefault();
   const formElement = event.currentTarget;
-  const eventId=$('#videoEventSelect').value; const file=$('#videoFile').files[0];
-  if(!eventId || !file) return;
-  const form=new FormData(); form.append('title',$('#videoTitle').value); form.append('price',$('#videoPrice').value); form.append('video',file);
-  setStatus($('#videoUploadStatus'),'Uploading dance video…');
-  try{ const result=await api(`/api/events/${eventId}/videos`,{method:'POST',body:form}); setStatus($('#videoUploadStatus'),`${result.title} is now available for ${money(result.price_cents)}.`,'success'); formElement.reset(); }
-  catch(error){ setStatus($('#videoUploadStatus'),error.message,'error'); }
+  const eventId=$('#videoEventSelect').value;
+  const videoUrl=$('#videoUrl').value.trim();
+  if(!eventId || !videoUrl) return;
+  const form=new FormData();
+  form.append('title',$('#videoTitle').value);
+  form.append('price',$('#videoPrice').value);
+  form.append('video_url',videoUrl);
+  setStatus($('#videoUploadStatus'),'Guardando enlace protegido del video…');
+  try{
+    const result=await api(`/api/events/${eventId}/videos`,{method:'POST',body:form});
+    setStatus($('#videoUploadStatus'),`${result.title} está disponible por ${money(result.price_cents)}.`,'success');
+    formElement.reset();
+    $('#videoTitle').value='Video completo del baile'; $('#videoPrice').value='75.00';
+    await loadEvents();
+  }catch(error){ setStatus($('#videoUploadStatus'),error.message,'error'); }
 });
 
 
@@ -228,6 +251,7 @@ $('#searchForm').addEventListener('submit', async (event)=>{
   cart.clear(); videoCart.clear(); photoProducts.clear(); updateCart();
   try{
     const result = await api('/api/search',{method:'POST',body:form});
+    priceCatalog=result.print_prices||priceCatalog; shippingCents=Number(result.shipping_cents||shippingCents);
     renderMatches(result.matches);
     renderVideos(result.videos || []);
     $('#resultSummary').textContent = `${result.matches.length} possible match${result.matches.length===1?'':'es'} found. Review results before purchasing.`;
@@ -248,14 +272,8 @@ function renderMatches(matches){
       <div class="photo-card-body">
         <div class="photo-choice">
           <label>Product<select data-product-for="${match.id}">
-            <option value="digital" data-price="${match.price_cents}">Digital download — ${money(match.price_cents)}</option>
-            <option value="8x10" data-price="2500">Print 8×10 — $25.00</option>
-            <option value="11x14" data-price="4000">Print 11×14 — $40.00</option>
-            <option value="13x19" data-price="5500">Print 13×19 — $55.00</option>
-            <option value="16x20" data-price="7500">Print 16×20 — $75.00</option>
-            <option value="20x24" data-price="11000">Print 20×24 — $110.00</option>
-            <option value="24x30" data-price="15000">Print 24×30 — $150.00</option>
-            <option value="24x36" data-price="19000">Print 24×36 — $190.00</option>
+            <option value="digital" data-price="${match.price_cents}">Imagen digital — ${money(match.price_cents)}</option>
+            ${priceCatalog.map(item=>`<option value="${item.product_code}" data-price="${item.price_cents}">${item.label} — ${money(item.price_cents)}</option>`).join('')}
           </select></label>
         </div>
         <div class="photo-price-row"><span>${translateString('Selected product')}</span><strong data-item-total="${match.id}">${money(match.price_cents)}</strong></div>
@@ -313,9 +331,13 @@ function renderVideos(videos){
   if(!wrap) return;
   if(!videos.length){ wrap.classList.add('hidden'); wrap.innerHTML=''; return; }
   wrap.classList.remove('hidden');
-  wrap.innerHTML=`<h3>Video del baile disponible</h3><p class="muted">Compra el video completo de este evento junto con tus fotografías.</p>`+videos.map(video=>`<article class="video-product"><video controls controlsList="nodownload noplaybackrate" disablePictureInPicture preload="metadata" src="${video.preview_url}"></video><div><strong>${video.title}</strong><span>${money(video.price_cents)}</span><label><input type="checkbox" data-video-id="${video.id}" data-price="${video.price_cents}"> Agregar video al carrito</label><small>Vista temporal protegida. El archivo se habilita después del pago.</small></div></article>`).join('');
-  $$('[data-video-id]').forEach(box=>box.addEventListener('change',()=>{ box.checked ? videoCart.add(box.dataset.videoId) : videoCart.delete(box.dataset.videoId); updateCart(); }));
-  $$('#videoResults video').forEach(video=>video.addEventListener('contextmenu',event=>event.preventDefault()));
+  wrap.innerHTML=`<div class="video-product-heading"><span>🎬</span><div><h3>Video completo del baile disponible</h3><p class="muted">Agrégalo al mismo carrito de tus fotografías. El enlace privado se habilita después del pago.</p></div></div>`+videos.map(video=>`<article class="video-product video-link-product"><div class="video-link-icon">▶</div><div><strong>${video.title}</strong><span class="video-price">${money(video.price_cents)}</span><button type="button" class="add-video-button" data-video-id="${video.id}" data-price="${video.price_cents}">Agregar video al carrito</button><small>Enlace protegido. No se muestra antes de confirmar el pago.</small></div></article>`).join('');
+  $$('[data-video-id]').forEach(button=>button.addEventListener('click',()=>{
+    const id=button.dataset.videoId;
+    if(videoCart.has(id)){videoCart.delete(id);button.classList.remove('selected');button.textContent='Agregar video al carrito';}
+    else{videoCart.add(id);button.classList.add('selected');button.textContent='Video agregado ✓';}
+    updateCart();
+  }));
 }
 
 function updateCart(){
@@ -332,7 +354,7 @@ $('#checkoutBtn').addEventListener('click',()=>{
   if(!cart.size && !videoCart.size){ alert('Select at least one photo or video.'); return; }
   const selectedVideos=[...videoCart].map(id=>document.querySelector(`[data-video-id="${id}"]`)).filter(Boolean);
   const printSelected=[...cart].some(id=>(photoProducts.get(id)?.product||'digital')!=='digital');
-  const total = [...cart].reduce((sum,id)=>sum+(photoProducts.get(id)?.price||0),0)+selectedVideos.reduce((sum,box)=>sum+Number(box.dataset.price||0),0)+(printSelected?1295:0);
+  const total = [...cart].reduce((sum,id)=>sum+(photoProducts.get(id)?.price||0),0)+selectedVideos.reduce((sum,box)=>sum+Number(box.dataset.price||0),0)+(printSelected?shippingCents:0);
   $('#checkoutText').textContent = `${cart.size} photo${cart.size===1?'':'s'} + ${videoCart.size} video${videoCart.size===1?'':'s'} • ${money(total)}`;
   setStatus($('#checkoutStatus'),'');
   $('#checkoutDialog').showModal();
@@ -358,14 +380,25 @@ $('#checkoutForm').addEventListener('submit',async(event)=>{
   event.preventDefault();
   const method=new FormData(event.currentTarget).get('payment_method');
   const email=$('#buyerEmail').value.trim();
-  setStatus($('#checkoutStatus'),'Creating your order…');
+  const emailConfirm=$('#buyerEmailConfirm').value.trim();
+  const phone=$('#buyerPhone').value.trim();
+  const phoneConfirm=$('#buyerPhoneConfirm').value.trim();
+  if(email.toLowerCase()!==emailConfirm.toLowerCase()){setStatus($('#checkoutStatus'),'Los dos correos electrónicos no coinciden.','error');return;}
+  if(phone.replace(/\D/g,'')!==phoneConfirm.replace(/\D/g,'')){setStatus($('#checkoutStatus'),'Los dos números de teléfono no coinciden.','error');return;}
+  if(!$('#smsConsent').checked){setStatus($('#checkoutStatus'),'Debes aceptar los mensajes transaccionales para recibir actualizaciones de la orden.','error');return;}
+  const paymentWindow=['card','apple_pay','google_pay'].includes(method)?window.open('about:blank','marin-secure-payment'):null;
+  setStatus($('#checkoutStatus'),'Creando tu orden…');
   $('#payNowBtn').disabled=true;
   try{
     const photo_items=[...cart].map(id=>({photo_id:id,product:photoProducts.get(id)?.product||'digital',quantity:1}));
     const hasPrint=photo_items.some(item=>item.product!=='digital');
     const shipping=hasPrint?{name:$('#shipName').value.trim(),address:$('#shipAddress').value.trim(),city:$('#shipCity').value.trim(),state:$('#shipState').value.trim(),postal_code:$('#shipPostal').value.trim(),country:$('#shipCountry').value.trim()}:{};
-    const result=await api('/api/checkout',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({photo_items,video_ids:[...videoCart],payment_method:method,email,shipping})});
-    if(result.redirect_url){ location.href=result.redirect_url; return; }
+    const result=await api('/api/checkout',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({photo_items,video_ids:[...videoCart],payment_method:method,email,email_confirm:emailConfirm,phone,phone_confirm:phoneConfirm,sms_consent:$('#smsConsent').checked,shipping})});
+    if(result.redirect_url){
+      if(paymentWindow){paymentWindow.location.href=result.redirect_url;paymentWindow.focus();setStatus($('#checkoutStatus'),'El pago seguro se abrió en otra pestaña. Esta galería permanecerá abierta.','success');}
+      else{location.href=result.redirect_url;}
+      return;
+    } else if(paymentWindow){paymentWindow.close();}
     setStatus($('#checkoutStatus'),`${result.message} Order ${result.order_id.slice(0,8).toUpperCase()} • ${money(result.total_cents)}`,'success');
     if(result.zelle_payment){
       const box=document.createElement('div');
@@ -396,8 +429,9 @@ $('#checkoutForm').addEventListener('submit',async(event)=>{
       box.append(title,amount,recipient,memo,warning,copy);
       $('#checkoutStatus').append(document.createElement('br'),box);
     }
-    if(result.customer_portal_url){ const link=document.createElement('a'); link.href=result.customer_portal_url; link.className='button-link order-portal-link'; link.textContent='Open private order page'; link.target='_blank'; $('#checkoutStatus').append(document.createElement('br'),link); }
-  }catch(error){ setStatus($('#checkoutStatus'),error.message,'error'); }
+    if(result.customer_portal_url){ const link=document.createElement('a'); link.href=result.customer_portal_url; link.className='button-link order-portal-link'; link.textContent='Abrir página privada de mi orden'; link.target='_blank'; const continueButton=document.createElement('button'); continueButton.type='button'; continueButton.className='secondary continue-shopping'; continueButton.textContent='Seguir viendo mis fotos'; continueButton.onclick=()=>$('#checkoutDialog').close(); $('#checkoutStatus').append(document.createElement('br'),link,continueButton); }
+    cart.clear(); videoCart.clear(); photoProducts.clear(); updateCart();
+  }catch(error){ if(paymentWindow)paymentWindow.close(); setStatus($('#checkoutStatus'),error.message,'error'); }
   finally{$('#payNowBtn').disabled=false;}
 });
 
@@ -409,7 +443,25 @@ $('#installBtn').addEventListener('click',async()=>{
   deferredInstallPrompt.prompt(); await deferredInstallPrompt.userChoice;
   deferredInstallPrompt=null; $('#installBtn').classList.add('hidden');
 });
-if('serviceWorker' in navigator){ navigator.serviceWorker.register('/static/sw.js?v=20260801-pro7').then(reg=>reg.update()).catch(()=>{}); } if('caches' in window){ caches.keys().then(keys=>keys.filter(key=>key==='facefind-v1').forEach(key=>caches.delete(key))); }
+if('serviceWorker' in navigator){ navigator.serviceWorker.register('/static/sw.js?v=20260801-pro8').then(reg=>reg.update()).catch(()=>{}); } if('caches' in window){ caches.keys().then(keys=>keys.filter(key=>key==='facefind-v1').forEach(key=>caches.delete(key))); }
+async function loadPrices(){
+  try{
+    const data=await api('/api/prices');
+    priceCatalog=data.prints||[]; shippingCents=Number(data.shipping_cents||1295);
+    const wrap=$('#pricingList');
+    if(wrap){
+      wrap.innerHTML=priceCatalog.map(item=>`<label><span>${item.label}</span><div>$ <input type="number" min="0" step="0.01" value="${(item.price_cents/100).toFixed(2)}" data-price-code="${item.product_code}"></div></label>`).join('')+`<label><span>Envío de impresiones</span><div>$ <input type="number" min="0" step="0.01" value="${(shippingCents/100).toFixed(2)}" id="shippingPrice"></div></label>`;
+    }
+  }catch(error){setStatus($('#pricingStatus'),error.message,'error');}
+}
+$('#savePrices')?.addEventListener('click',async()=>{
+  const prices={}; $$('[data-price-code]').forEach(input=>prices[input.dataset.priceCode]=Math.round(Number(input.value||0)*100));
+  const shipping=Math.round(Number($('#shippingPrice')?.value||0)*100);
+  setStatus($('#pricingStatus'),'Guardando precios…');
+  try{const result=await api('/api/admin/prices',{method:'PATCH',headers:{'Content-Type':'application/json',...adminHeaders()},body:JSON.stringify({prices,shipping_cents:shipping})}); priceCatalog=result.prints;shippingCents=result.shipping_cents;setStatus($('#pricingStatus'),'Precios actualizados.','success');}
+  catch(error){setStatus($('#pricingStatus'),error.message,'error');}
+});
+loadPrices();
 loadEvents().catch(error=>setStatus($('#searchStatus'),error.message,'error'));
 $('#refreshEvents')?.addEventListener('click',()=>loadEvents().catch(error=>setStatus($('#eventStatus'),error.message,'error')));
 
@@ -469,13 +521,13 @@ async function loadOrders(){
     $('#orderList').innerHTML=orders.length?orders.map(order=>{
       const items=(order.items||[]).map(item=>`${orderProductLabel(item)} × ${item.quantity||1}`).join(', ') || 'Video order';
       const shipping=order.shipping&&order.shipping.address?`<small>${order.shipping.name} • ${order.shipping.address}, ${order.shipping.city}, ${order.shipping.state} ${order.shipping.postal_code}, ${order.shipping.country}</small>`:'';
-      return `<article class="order-card"><div><strong>#${order.id.slice(0,8).toUpperCase()}</strong><span>${order.email}</span><small>${new Date(order.created_at+'Z').toLocaleString()} • ${order.payment_method.replaceAll('_',' ')} • ${money(order.total_cents)}</small><small>${items}${order.video_ids?.length?` • ${order.video_ids.length} video(s)`:''}</small>${shipping}</div><div class="order-actions"><select data-order-status="${order.id}">${ORDER_STATUSES.map(status=>`<option value="${status}" ${status===order.status?'selected':''}>${status.replaceAll('_',' ')}</option>`).join('')}</select><button class="secondary" data-save-order="${order.id}">Save</button></div></article>`;
+      return `<article class="order-card"><div><strong>#${order.id.slice(0,8).toUpperCase()}</strong><span>${order.email} • ${order.phone||'sin teléfono'}</span><small>${new Date(order.created_at+'Z').toLocaleString()} • ${order.payment_method.replaceAll('_',' ')} • ${money(order.total_cents)}</small><small>${items}${order.video_ids?.length?` • ${order.video_ids.length} video(s)`:''}</small><small class="download-indicator">${order.download_count?`⬇ ${order.download_count} descarga(s) • última ${new Date(order.last_download_at+'Z').toLocaleString()}`:'Sin descargas todavía'}</small>${shipping}</div><div class="order-actions"><select data-order-status="${order.id}">${ORDER_STATUSES.map(status=>`<option value="${status}" ${status===order.status?'selected':''}>${status.replaceAll('_',' ')}</option>`).join('')}</select><button class="secondary" data-save-order="${order.id}">Save</button></div></article>`;
     }).join(''):'<p class="muted">No orders yet.</p>';
     $$('[data-save-order]').forEach(button=>button.addEventListener('click',async()=>{
       const id=button.dataset.saveOrder;
       const status=document.querySelector(`[data-order-status="${id}"]`).value;
       button.disabled=true;
-      try{ const result=await api(`/api/admin/orders/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json',...adminHeaders()},body:JSON.stringify({status})}); setStatus($('#orderStatus'),`Order ${id.slice(0,8).toUpperCase()} updated to ${result.status.replaceAll('_',' ')}.${result.email_sent?' Email sent.':' Email was not sent; use Send test email and check Render Logs.'}`,result.email_sent?'success':'error'); }
+      try{ const result=await api(`/api/admin/orders/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json',...adminHeaders()},body:JSON.stringify({status})}); setStatus($('#orderStatus'),`Order ${id.slice(0,8).toUpperCase()} updated to ${result.status.replaceAll('_',' ')}.${result.email_sent?' Email enviado.':' Email no enviado.'}${result.sms_sent?' SMS enviado.':' SMS no enviado o Twilio no configurado.'}`,result.email_sent?'success':'error'); }
       catch(error){ setStatus($('#orderStatus'),error.message,'error'); }
       finally{button.disabled=false;}
     }));
@@ -493,6 +545,13 @@ $('#testEmail')?.addEventListener('click',async()=>{
   }catch(error){
     setStatus($('#orderStatus'),error.message,'error');
   }
+});
+$('#testSms')?.addEventListener('click',async()=>{
+  const phone=window.prompt('Enviar SMS de prueba a:','713-378-1730');
+  if(!phone)return;
+  setStatus($('#orderStatus'),'Enviando SMS de prueba…');
+  try{const result=await api('/api/admin/sms-test',{method:'POST',headers:{'Content-Type':'application/json',...adminHeaders()},body:JSON.stringify({phone})});setStatus($('#orderStatus'),`SMS enviado a ${result.recipient}.`,'success');}
+  catch(error){setStatus($('#orderStatus'),error.message,'error');}
 });
 $('#refreshOrders')?.addEventListener('click',loadOrders);
 $('#adminToken')?.addEventListener('change',loadOrders);
