@@ -1,0 +1,10 @@
+MARIN FOTOGRAFIA Y VIDEO
+Backup master: 2026-08-01
+Version: PRO Secure v7.1
+Repository: Miguelma1969/-marin-fotografia-video
+Render service: marin-fotografia-video
+Primary URL: https://marin-fotografia-video.onrender.com
+
+This source backup contains the corrected application code.
+It intentionally does not contain passwords, ADMIN_TOKEN, Stripe secrets,
+Gmail app passwords, or production files from Render /var/data.
