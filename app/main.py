@@ -51,6 +51,7 @@ SMTP_USERNAME = os.getenv("SMTP_USERNAME", "").strip()
 SMTP_PASSWORD = "".join(os.getenv("SMTP_PASSWORD", "").split())
 SMTP_FROM = os.getenv("SMTP_FROM", SMTP_USERNAME or "orders@localhost").strip()
 PHOTOGRAPHER_EMAIL = os.getenv("PHOTOGRAPHER_EMAIL", "").strip()
+ZELLE_RECIPIENT = os.getenv("ZELLE_RECIPIENT", "713-378-1730").strip() or "713-378-1730"
 
 for directory in (DATA_DIR, PHOTO_DIR, SELFIE_DIR, VIDEO_DIR):
     directory.mkdir(parents=True, exist_ok=True)
@@ -229,7 +230,7 @@ def validate_search_token(token: str, event_id: str) -> None:
         raise HTTPException(403, "This protected preview link has expired. Search the event again.")
 
 
-def send_order_email(order_id: str, recipient: str, status: str, total_cents: int, access_token: str = "") -> bool:
+def send_order_email(order_id: str, recipient: str, status: str, total_cents: int, access_token: str = "", payment_method: str = "") -> bool:
     """Send an order email and write SMTP failures to Render logs."""
     if not SMTP_HOST or not recipient:
         print(f"[email] skipped: SMTP_HOST or recipient is missing (recipient={recipient!r})", flush=True)
@@ -238,10 +239,20 @@ def send_order_email(order_id: str, recipient: str, status: str, total_cents: in
     released = status in {"paid", "processing_prints", "shipped", "completed"}
     subject_status = "Your photo is ready to download" if released else "Order received"
     availability = (
-        "Your payment has been confirmed. Open your private order page below to download your purchased photo.\n"
+        "Your payment has been confirmed. Open your private order page below to download your purchased files.\n"
         if released
         else "Your order is waiting for payment confirmation. Downloads will appear after the photographer approves payment.\n"
     )
+    zelle_instructions = ""
+    if payment_method == "zelle" and not released:
+        zelle_instructions = (
+            f"\nZELLE PAYMENT INSTRUCTIONS\n"
+            f"Send: ${total_cents / 100:.2f}\n"
+            f"To: {ZELLE_RECIPIENT}\n"
+            f"Memo: Order {order_id[:8].upper()}\n"
+            f"Verify the recipient in your banking app before sending.\n"
+            f"The photographer will release downloads after confirming the payment.\n"
+        )
 
     msg = EmailMessage()
     msg["Subject"] = f"{subject_status} • Marin Fotografía y Video • {order_id[:8].upper()}"
@@ -254,6 +265,7 @@ def send_order_email(order_id: str, recipient: str, status: str, total_cents: in
         f"Status: {status.replace('_', ' ')}\n"
         f"Total: ${total_cents / 100:.2f}\n\n"
         f"{availability}"
+        f"{zelle_instructions}\n"
         f"{portal_line}"
         f"Marin Fotografía y Video • {BRAND_PHONE}"
     )
@@ -543,7 +555,7 @@ def biometric_consent_page(request: Request):
 
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request, "event_id": ""})
+    return templates.TemplateResponse("index.html", {"request": request, "event_id": "", "zelle_recipient": ZELLE_RECIPIENT})
 
 
 @app.get("/invitations/demo/{theme}", response_class=HTMLResponse)
@@ -565,7 +577,7 @@ def event_landing(request: Request, event_id: str):
         event = connection.execute("SELECT id FROM events WHERE id = ?", (event_id,)).fetchone()
     if event is None:
         raise HTTPException(404, "Event not found.")
-    return templates.TemplateResponse("index.html", {"request": request, "event_id": event_id})
+    return templates.TemplateResponse("index.html", {"request": request, "event_id": event_id, "zelle_recipient": ZELLE_RECIPIENT})
 
 
 @app.get("/account/{access_token}", response_class=HTMLResponse)
@@ -575,7 +587,7 @@ def customer_account(request: Request, access_token: str):
     if row is None:
         raise HTTPException(404, "Private order page not found.")
     order = serialize_order(row)
-    return templates.TemplateResponse("account.html", {"request": request, "order": order, "brand_phone": BRAND_PHONE})
+    return templates.TemplateResponse("account.html", {"request": request, "order": order, "brand_phone": BRAND_PHONE, "zelle_recipient": ZELLE_RECIPIENT})
 
 
 @app.get("/api/customer/orders/{access_token}")
@@ -925,7 +937,7 @@ def update_order_status(order_id: str, payload: dict, request: Request):
         if row is None:
             raise HTTPException(404, "Order not found.")
         connection.execute("UPDATE orders SET status = ? WHERE id = ?", (status, order_id))
-    emailed = send_order_email(order_id, row["email"], status, row["total_cents"], row["access_token"])
+    emailed = send_order_email(order_id, row["email"], status, row["total_cents"], row["access_token"], row["payment_method"])
     return {"ok": True, "order_id": order_id, "status": status, "email_sent": emailed}
 
 
@@ -1062,7 +1074,14 @@ def checkout(payload: dict):
     else:
         message = f"Demo order created for {provider_names[payment_method]}. Connect merchant credentials to charge the customer."
 
-    emailed = send_order_email(order_id, email, status, total, access_token)
+    emailed = send_order_email(order_id, email, status, total, access_token, payment_method)
     if PHOTOGRAPHER_EMAIL:
-        send_order_email(order_id, PHOTOGRAPHER_EMAIL, status, total, access_token)
-    return JSONResponse({"ok":True,"mode":mode,"order_id":order_id,"payment_method":payment_method,"status":status,"message":message,"items":len(normalized_items)+len(video_rows),"total_cents":total,"shipping_cents":SHIPPING_CENTS if requires_shipping else 0,"redirect_url":redirect_url,"email_sent":emailed,"customer_portal_url":f"{PUBLIC_BASE_URL}/account/{access_token}"})
+        send_order_email(order_id, PHOTOGRAPHER_EMAIL, status, total, access_token, payment_method)
+    zelle_payment = None
+    if payment_method == "zelle":
+        zelle_payment = {
+            "recipient": ZELLE_RECIPIENT,
+            "amount_cents": total,
+            "memo": f"Order {order_id[:8].upper()}",
+        }
+    return JSONResponse({"ok":True,"mode":mode,"order_id":order_id,"payment_method":payment_method,"status":status,"message":message,"items":len(normalized_items)+len(video_rows),"total_cents":total,"shipping_cents":SHIPPING_CENTS if requires_shipping else 0,"redirect_url":redirect_url,"email_sent":emailed,"customer_portal_url":f"{PUBLIC_BASE_URL}/account/{access_token}","zelle_payment":zelle_payment})

@@ -349,7 +349,7 @@ $$('input[name="payment_method"]').forEach(input=>input.addEventListener('change
     google_pay:'Google Pay is offered through Stripe on compatible devices and HTTPS domains.',
     paypal:'PayPal checkout requires a PayPal Business client ID and secret.',
     cash:'The order will be marked pending until the photographer receives cash.',
-    zelle:'The order will be marked pending until the photographer verifies the transfer.'
+    zelle:`Send the payment by Zelle to ${document.body.dataset.zelleRecipient || '713-378-1730'}. Include the order number in the memo. Downloads unlock after verification.`
   };
   $('#paymentNotice').textContent=notices[input.value];
 }));
@@ -366,7 +366,37 @@ $('#checkoutForm').addEventListener('submit',async(event)=>{
     const shipping=hasPrint?{name:$('#shipName').value.trim(),address:$('#shipAddress').value.trim(),city:$('#shipCity').value.trim(),state:$('#shipState').value.trim(),postal_code:$('#shipPostal').value.trim(),country:$('#shipCountry').value.trim()}:{};
     const result=await api('/api/checkout',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({photo_items,video_ids:[...videoCart],payment_method:method,email,shipping})});
     if(result.redirect_url){ location.href=result.redirect_url; return; }
-    setStatus($('#checkoutStatus'),`${result.message} Order ${result.order_id.slice(0,8).toUpperCase()} • ${money(result.total_cents)}`,'success'); if(result.customer_portal_url){ const link=document.createElement('a'); link.href=result.customer_portal_url; link.className='button-link order-portal-link'; link.textContent='Open private order page'; link.target='_blank'; $('#checkoutStatus').append(document.createElement('br'),link); }
+    setStatus($('#checkoutStatus'),`${result.message} Order ${result.order_id.slice(0,8).toUpperCase()} • ${money(result.total_cents)}`,'success');
+    if(result.zelle_payment){
+      const box=document.createElement('div');
+      box.className='zelle-confirmation';
+      const title=document.createElement('strong');
+      title.textContent='Pago con Zelle / Zelle payment';
+      const amount=document.createElement('p');
+      amount.textContent=`Envía / Send ${money(result.zelle_payment.amount_cents)} a / to:`;
+      const recipient=document.createElement('div');
+      recipient.className='zelle-recipient';
+      recipient.textContent=result.zelle_payment.recipient;
+      const memo=document.createElement('p');
+      memo.textContent=`Nota / Memo: ${result.zelle_payment.memo}`;
+      const warning=document.createElement('small');
+      warning.textContent='Verifica el nombre del destinatario en tu banco antes de enviar. La descarga se habilita después de confirmar el pago.';
+      const copy=document.createElement('button');
+      copy.type='button';
+      copy.className='secondary zelle-copy';
+      copy.textContent='Copiar número / Copy number';
+      copy.addEventListener('click',async()=>{
+        try{
+          await navigator.clipboard.writeText(result.zelle_payment.recipient);
+          copy.textContent='Copiado ✓';
+        }catch{
+          copy.textContent=result.zelle_payment.recipient;
+        }
+      });
+      box.append(title,amount,recipient,memo,warning,copy);
+      $('#checkoutStatus').append(document.createElement('br'),box);
+    }
+    if(result.customer_portal_url){ const link=document.createElement('a'); link.href=result.customer_portal_url; link.className='button-link order-portal-link'; link.textContent='Open private order page'; link.target='_blank'; $('#checkoutStatus').append(document.createElement('br'),link); }
   }catch(error){ setStatus($('#checkoutStatus'),error.message,'error'); }
   finally{$('#payNowBtn').disabled=false;}
 });
@@ -379,7 +409,7 @@ $('#installBtn').addEventListener('click',async()=>{
   deferredInstallPrompt.prompt(); await deferredInstallPrompt.userChoice;
   deferredInstallPrompt=null; $('#installBtn').classList.add('hidden');
 });
-if('serviceWorker' in navigator){ navigator.serviceWorker.register('/static/sw.js?v=20260801-pro4').then(reg=>reg.update()).catch(()=>{}); } if('caches' in window){ caches.keys().then(keys=>keys.filter(key=>key==='facefind-v1').forEach(key=>caches.delete(key))); }
+if('serviceWorker' in navigator){ navigator.serviceWorker.register('/static/sw.js?v=20260801-pro7').then(reg=>reg.update()).catch(()=>{}); } if('caches' in window){ caches.keys().then(keys=>keys.filter(key=>key==='facefind-v1').forEach(key=>caches.delete(key))); }
 loadEvents().catch(error=>setStatus($('#searchStatus'),error.message,'error'));
 $('#refreshEvents')?.addEventListener('click',()=>loadEvents().catch(error=>setStatus($('#eventStatus'),error.message,'error')));
 
